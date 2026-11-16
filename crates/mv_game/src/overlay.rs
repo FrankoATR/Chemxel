@@ -4,6 +4,7 @@ use glam::{DVec3, IVec3};
 use mv_core::consts::VOXELS_PER_BLOCK;
 use mv_materials::MaterialRegistry;
 use mv_render::VolumeStats;
+use mv_sim::TickStats;
 use mv_world::WorldStats;
 use mv_world::raycast::RayHit;
 
@@ -45,6 +46,9 @@ pub struct OverlayData<'a> {
     pub worst_frame_ms: f64,
     pub timings: &'a Timings,
     pub tick: u64,
+    pub sim: &'a TickStats,
+    pub sim_active: usize,
+    pub sim_paused: bool,
     pub camera: DVec3,
     pub sync: &'a SyncStats,
     pub world: &'a WorldStats,
@@ -55,7 +59,15 @@ pub struct OverlayData<'a> {
 
 const MIB: f64 = 1024.0 * 1024.0;
 
-pub fn draw(ctx: &egui::Context, data: &OverlayData<'_>, editor: &mut Editor) {
+/// Buttons pressed in the overlay this frame.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OverlayActions {
+    pub drop_test: bool,
+    pub toggle_pause: bool,
+}
+
+pub fn draw(ctx: &egui::Context, data: &OverlayData<'_>, editor: &mut Editor) -> OverlayActions {
+    let mut actions = OverlayActions::default();
     egui::Window::new("Chemxel")
         .default_pos([12.0, 12.0])
         .default_width(300.0)
@@ -65,10 +77,56 @@ pub fn draw(ctx: &egui::Context, data: &OverlayData<'_>, editor: &mut Editor) {
             ui.separator();
             world(ui, data, editor.target());
             ui.separator();
+            simulation(ui, data, &mut actions);
+            ui.separator();
             brush(ui, data.registry, editor);
             ui.separator();
             help(ui, data.cursor_grabbed);
         });
+    actions
+}
+
+fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActions) {
+    let s = d.sim;
+    egui::Grid::new("sim").num_columns(2).show(ui, |ui| {
+        let row = |ui: &mut egui::Ui, label: &str, value: String| {
+            ui.label(label);
+            ui.monospace(value);
+            ui.end_row();
+        };
+        row(
+            ui,
+            "Sim",
+            format!(
+                "{}{} active chunks",
+                if d.sim_paused { "PAUSED, " } else { "" },
+                d.sim_active
+            ),
+        );
+        row(
+            ui,
+            "Moves/tick",
+            format!("{} ({} across borders)", s.moves, s.border_moves),
+        );
+        row(ui, "Cells scanned", format!("{}", s.cells_scanned));
+    });
+    ui.horizontal(|ui| {
+        if ui
+            .button("Drop 100k sand + water")
+            .on_hover_text("Above the voxel under the crosshair")
+            .clicked()
+        {
+            actions.drop_test = true;
+        }
+        let label = if d.sim_paused {
+            "Resume (P)"
+        } else {
+            "Pause (P)"
+        };
+        if ui.button(label).clicked() {
+            actions.toggle_pause = true;
+        }
+    });
 }
 
 fn performance(ui: &mut egui::Ui, d: &OverlayData<'_>) {
@@ -128,7 +186,6 @@ fn world(ui: &mut egui::Ui, d: &OverlayData<'_>, target: Option<&RayHit>) {
             "Chunks loaded",
             format!("{} ({} uniform)", w.chunks, w.uniform_chunks),
         );
-        row(ui, "Chunks active", "0 (milestone 3)".to_owned());
         row(
             ui,
             "Streaming",
@@ -220,7 +277,7 @@ fn brush(ui: &mut egui::Ui, registry: &MaterialRegistry, editor: &mut Editor) {
 
 fn help(ui: &mut egui::Ui, grabbed: bool) {
     let text = if grabbed {
-        "LMB remove · RMB place · wheel radius · 1-9 material\nWASD/Space/Ctrl move · Shift fast · Esc release mouse · F3 overlay"
+        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD/Space/Ctrl move · Shift fast · Esc release mouse · F3 overlay"
     } else {
         "Click the world to capture the mouse · Esc quits · F3 overlay"
     };

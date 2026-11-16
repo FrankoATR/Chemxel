@@ -68,6 +68,8 @@ pub struct SimConfig {
     pub max_ticks_per_frame: u32,
     /// Seed for deterministic simulation randomness and world generation.
     pub seed: u64,
+    /// Ticks without changes before an active chunk falls asleep.
+    pub sleep_after_ticks: u32,
 }
 
 impl Default for SimConfig {
@@ -76,6 +78,7 @@ impl Default for SimConfig {
             tick_rate_hz: 30.0,
             max_ticks_per_frame: 4,
             seed: 0x00C0_FFEE,
+            sleep_after_ticks: 2,
         }
     }
 }

@@ -1507,7 +1507,10 @@ dependencies = [
  "criterion",
  "glam",
  "mv_core",
+ "mv_materials",
+ "mv_sim",
  "mv_world",
+ "rayon",
 ]
 
 [[package]]
@@ -1574,6 +1577,11 @@ dependencies = [
 name = "mv_sim"
 version = "0.1.0"
 dependencies = [
+ "glam",
+ "mv_core",
+ "mv_materials",
+ "mv_world",
+ "rayon",
  "tracing",
 ]
 

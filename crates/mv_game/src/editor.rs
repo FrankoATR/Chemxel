@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use glam::DVec3;
+use mv_core::WorldPos;
 use mv_core::config::EditorConfig;
 use mv_materials::{MaterialId, MaterialRegistry, MatterState};
 use mv_render::{BrushPreview, Camera};
@@ -108,8 +109,14 @@ impl Editor {
     }
 
     /// Updates the target under the crosshair and applies held strokes.
-    /// Returns the number of voxels changed this frame.
-    pub fn update(&mut self, world: &mut World, camera: &Camera, dt: Duration) -> usize {
+    /// Returns the world box that was edited, if any voxel changed (to wake the
+    /// simulation there).
+    pub fn update(
+        &mut self,
+        world: &mut World,
+        camera: &Camera,
+        dt: Duration,
+    ) -> Option<(WorldPos, WorldPos)> {
         let _span = tracing::trace_span!("editor_update").entered();
         self.target = raycast(
             world,
@@ -117,31 +124,28 @@ impl Editor {
             camera.forward().as_dvec3(),
             self.reach,
         );
-        let Some(action) = self.held else {
-            return 0;
-        };
+        let action = self.held?;
         self.since_last_stroke += dt;
         if self.since_last_stroke < self.repeat {
-            return 0;
+            return None;
         }
         self.since_last_stroke = Duration::ZERO;
-        let Some(hit) = self.target else {
-            return 0;
-        };
-        let changed = match action {
-            BrushAction::Remove => {
+        let hit = self.target?;
+        let (center, changed) = match action {
+            BrushAction::Remove => (
+                hit.voxel,
                 fill_sphere(world, hit.voxel, self.brush.radius, MaterialId::AIR, |_| {
                     true
-                })
-            }
+                }),
+            ),
             BrushAction::Place => {
-                let Some(material) = self.selected_material() else {
-                    return 0;
-                };
+                let material = self.selected_material()?;
                 let overwritable = &self.overwritable;
-                fill_sphere(world, hit.adjacent(), self.brush.radius, material, |m| {
+                let center = hit.adjacent();
+                let changed = fill_sphere(world, center, self.brush.radius, material, |m| {
                     overwritable.get(m.index()).copied().unwrap_or(false)
-                })
+                });
+                (center, changed)
             }
         };
         // Refresh the target so the preview follows the edited surface this frame.
@@ -151,7 +155,8 @@ impl Editor {
             camera.forward().as_dvec3(),
             self.reach,
         );
-        changed
+        let r = self.brush.radius.ceil() as i64;
+        (changed > 0).then(|| (WorldPos(center.0 - r), WorldPos(center.0 + r)))
     }
 
     /// Sphere to highlight in the frame.

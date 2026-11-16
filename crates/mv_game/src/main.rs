@@ -1,7 +1,9 @@
 //! Chemxel entry point.
 
 mod app;
+mod bench_drop;
 mod bench_fly;
+mod drop_test;
 mod editor;
 mod fly_camera;
 mod frame_timer;
@@ -26,7 +28,9 @@ fn main() -> anyhow::Result<()> {
     let registry =
         MaterialRegistry::load_dir(&assets.join("materials")).context("loading materials")?;
     let world = game_world::GameWorld::new(&config, &registry)?;
-    let bench = bench_fly_arg().map(|seconds| {
+    let bench_drop = seconds_arg("--bench-drop")
+        .map(|s| bench_drop::BenchDrop::new(std::time::Duration::from_secs_f64(s)));
+    let bench = seconds_arg("--bench-fly").map(|seconds| {
         let c = &config.controls;
         let speed = c.fly_speed * c.fast_multiplier * mv_core::consts::VOXELS_PER_BLOCK as f32;
         bench_fly::BenchFly::new(
@@ -39,17 +43,17 @@ fn main() -> anyhow::Result<()> {
     // Games redraw continuously; the frame rate is limited by vsync (if enabled).
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = app::App::new(config, registry, world, bench);
+    let mut app = app::App::new(config, registry, world, bench, bench_drop);
     event_loop
         .run_app(&mut app)
         .context("running the event loop")?;
     app.into_result()
 }
 
-/// `--bench-fly[=SECONDS]` (default 20 s).
-fn bench_fly_arg() -> Option<f64> {
+/// `--NAME[=SECONDS]` (default 20 s).
+fn seconds_arg(name: &str) -> Option<f64> {
     std::env::args().find_map(|arg| {
-        let rest = arg.strip_prefix("--bench-fly")?;
+        let rest = arg.strip_prefix(name)?;
         match rest.strip_prefix('=') {
             Some(secs) => secs.parse().ok(),
             None if rest.is_empty() => Some(20.0),

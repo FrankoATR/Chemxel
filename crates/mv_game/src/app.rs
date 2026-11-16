@@ -23,7 +23,9 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
+use crate::bench_drop::BenchDrop;
 use crate::bench_fly::BenchFly;
+use crate::drop_test;
 use crate::editor::{BrushAction, Editor};
 use crate::fly_camera::FlyController;
 use crate::frame_timer::FrameTimer;
@@ -67,6 +69,7 @@ pub struct App {
     show_overlay: bool,
     stats: Stats,
     bench: Option<BenchFly>,
+    bench_drop: Option<BenchDrop>,
     exit_requested: bool,
     running: Option<Running>,
     /// Fatal error captured inside the event loop, reported after it exits.
@@ -79,6 +82,7 @@ impl App {
         registry: MaterialRegistry,
         world: GameWorld,
         bench: Option<BenchFly>,
+        bench_drop: Option<BenchDrop>,
     ) -> Self {
         let timestep = FixedTimestep::new(config.sim.tick_rate_hz, config.sim.max_ticks_per_frame);
         let camera = Camera::new(
@@ -89,11 +93,12 @@ impl App {
         );
         let fly = FlyController::new(&config.controls);
         let editor = Editor::new(&config.editor, &registry);
+        let sim = Simulation::new(&registry, &config.sim);
         Self {
             config,
             registry,
             world,
-            sim: Simulation::new(),
+            sim,
             timestep,
             frame_timer: FrameTimer::new(),
             camera,
@@ -104,6 +109,7 @@ impl App {
             show_overlay: true,
             stats: Stats::default(),
             bench,
+            bench_drop,
             exit_requested: false,
             running: None,
             fatal: None,
@@ -188,7 +194,27 @@ impl App {
         let t = Instant::now();
         let ticks = self.timestep.advance(dt);
         for _ in 0..ticks {
-            self.sim.step();
+            let tick_start = Instant::now();
+            self.sim.step(&mut self.world.world);
+            if let Some(b) = self.bench_drop.as_mut() {
+                b.record_tick(tick_start.elapsed(), &self.sim.stats());
+            }
+        }
+        if let Some(b) = self.bench_drop.as_mut() {
+            if b.should_drop(self.world.is_idle()) {
+                let ground = mv_core::WorldPos(
+                    self.camera.position.floor().as_i64vec3() - glam::I64Vec3::Y * 48,
+                );
+                let boxes =
+                    drop_test::drop_sand_and_water(&mut self.world.world, &self.registry, ground);
+                for (min, max) in boxes {
+                    self.sim.wake_box(&self.world.world, min, max);
+                }
+            } else if b.advance(dt) {
+                tracing::info!("{}", b.report());
+                self.bench_drop = None;
+                self.exit_requested = true;
+            }
         }
         if ticks > 0 {
             timings
@@ -224,7 +250,9 @@ impl App {
         }
 
         let t = Instant::now();
-        self.editor.update(&mut self.world.world, &self.camera, dt);
+        if let Some((min, max)) = self.editor.update(&mut self.world.world, &self.camera, dt) {
+            self.sim.wake_box(&self.world.world, min, max);
+        }
         timings.editor.add(t.elapsed().as_secs_f64() * 1000.0);
 
         let Some(running) = self.running.as_mut() else {
@@ -250,12 +278,17 @@ impl App {
             self.stats.world_refreshed = Some(now);
         }
 
+        let sim_stats = self.sim.stats();
+        let mut actions = overlay::OverlayActions::default();
         let gui_frame = {
             let data = OverlayData {
                 fps: self.frame_timer.fps(),
                 worst_frame_ms: self.frame_timer.worst_frame_ms(),
                 timings: &self.stats.timings,
                 tick: self.sim.tick(),
+                sim: &sim_stats,
+                sim_active: self.sim.active_chunks(),
+                sim_paused: self.sim.is_paused(),
                 camera: self.camera.position,
                 sync: &self.stats.sync,
                 world: &self.stats.world,
@@ -267,12 +300,17 @@ impl App {
             let (show_overlay, grabbed) = (self.show_overlay, self.cursor_grabbed);
             running.gui.run(&running.window, |ctx| {
                 if show_overlay {
-                    overlay::draw(ctx, &data, editor);
+                    actions = overlay::draw(ctx, &data, editor);
                 }
                 if grabbed {
                     overlay::crosshair(ctx);
                 }
             })
+        };
+
+        self.apply_overlay_actions(actions);
+        let Some(running) = self.running.as_mut() else {
+            return;
         };
 
         let t = Instant::now();
@@ -311,6 +349,28 @@ impl App {
         }
     }
 
+    fn apply_overlay_actions(&mut self, actions: overlay::OverlayActions) {
+        if actions.toggle_pause {
+            self.sim.set_paused(!self.sim.is_paused());
+        }
+        if actions.drop_test {
+            // Above the voxel under the crosshair, or below the camera.
+            let ground = self.editor.target().map_or_else(
+                || {
+                    mv_core::WorldPos(
+                        self.camera.position.floor().as_i64vec3() - glam::I64Vec3::Y * 60,
+                    )
+                },
+                |hit| hit.voxel,
+            );
+            let boxes =
+                drop_test::drop_sand_and_water(&mut self.world.world, &self.registry, ground);
+            for (min, max) in boxes {
+                self.sim.wake_box(&self.world.world, min, max);
+            }
+        }
+    }
+
     fn on_key(&mut self, event_loop: &ActiveEventLoop, key: KeyCode, state: ElementState) {
         let pressed = state == ElementState::Pressed;
         if pressed {
@@ -324,6 +384,7 @@ impl App {
                     return;
                 }
                 KeyCode::F3 => self.show_overlay = !self.show_overlay,
+                KeyCode::KeyP => self.sim.set_paused(!self.sim.is_paused()),
                 _ => {
                     if let Some(index) = digit_index(key) {
                         self.editor.select(index);
