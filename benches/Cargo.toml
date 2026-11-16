@@ -15,10 +15,15 @@ bench = false
 
 [dev-dependencies]
 mv_core.workspace = true
+mv_world.workspace = true
 criterion.workspace = true
 
 [[bench]]
 name = "coords"
+harness = false
+
+[[bench]]
+name = "chunk"
 harness = false
 
 [lints]
