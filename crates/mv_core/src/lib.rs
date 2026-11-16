@@ -36,6 +36,14 @@ pub mod consts {
     pub const BRICKS_PER_CHUNK: usize =
         BRICKS_PER_CHUNK_AXIS * BRICKS_PER_CHUNK_AXIS * BRICKS_PER_CHUNK_AXIS;
 
+    /// Edge of a temperature cell in microvoxels (coarse thermal grid, ADR 007).
+    pub const THERMAL_CELL_SIZE: usize = 4;
+    /// Temperature cells along a chunk axis (16).
+    pub const THERMAL_CELLS_PER_AXIS: usize = CHUNK_SIZE / THERMAL_CELL_SIZE;
+    /// Temperature cells per chunk (16³ = 4096), indexed x-fastest.
+    pub const THERMAL_CELLS_PER_CHUNK: usize =
+        THERMAL_CELLS_PER_AXIS * THERMAL_CELLS_PER_AXIS * THERMAL_CELLS_PER_AXIS;
+
     /// Microvoxels along one edge of a classic 1 m block.
     pub const VOXELS_PER_BLOCK: usize = 16;
     /// Edge length of a microvoxel in metres (6.25 cm).

@@ -22,6 +22,7 @@ mod aabb;
 mod automaton;
 mod rng;
 mod table;
+mod thermal;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,14 +30,16 @@ use std::sync::Arc;
 use glam::{I64Vec3, IVec3};
 use mv_core::config::SimConfig;
 use mv_core::{ChunkPos, WorldPos};
-use mv_materials::MaterialRegistry;
+use mv_materials::{MaterialId, MaterialRegistry};
 use mv_world::World;
 use rayon::prelude::*;
 
 pub use aabb::Aabb;
-pub use table::{Kind, MaterialTable, Props};
+pub use table::{Kind, MaterialTable, Props, ThermalProps};
+pub use thermal::{CELL, CELLS, CELLS_AXIS, CellArray};
 
 use automaton::{MOVED_WORDS, Move, MovedBits, TaskOut, TickCtx, View};
+use thermal::{DiffusionParams, ThermalChunk, TransitionParams, cell_of, unstable_at};
 
 /// Counters of the last tick, for the debug overlay and benchmarks.
 #[derive(Debug, Clone, Copy, Default)]
@@ -47,6 +50,10 @@ pub struct TickStats {
     pub moves: u32,
     /// Moves that crossed a chunk border (applied after their phase).
     pub border_moves: u32,
+    /// Chunks with a temperature field.
+    pub thermal_chunks: usize,
+    /// Voxels that changed material because of temperature.
+    pub transitions: u32,
 }
 
 /// Simulation state of an awake chunk.
@@ -74,6 +81,17 @@ pub struct Simulation {
     /// Recycled "moved" bitsets (32 KiB each).
     spare_bits: Vec<Box<MovedBits>>,
     stats: TickStats,
+
+    thermal: HashMap<ChunkPos, ThermalChunk>,
+    /// Recycled diffusion output buffers.
+    thermal_scratch: Vec<Box<CellArray>>,
+    ambient: f32,
+    epsilon: f32,
+    hysteresis: f32,
+    transition_rate: f32,
+    diffusion_rate: f32,
+    /// Energy deliberately not conserved (phase changes, fields put to sleep).
+    energy_imbalance: f64,
 }
 
 impl Simulation {
@@ -91,6 +109,114 @@ impl Simulation {
             active: HashMap::new(),
             spare_bits: Vec::new(),
             stats: TickStats::default(),
+            thermal: HashMap::new(),
+            thermal_scratch: Vec::new(),
+            ambient: config.ambient_temperature,
+            epsilon: config.thermal_epsilon,
+            hysteresis: config.transition_hysteresis,
+            transition_rate: config.transition_rate,
+            diffusion_rate: config.diffusion_rate,
+            energy_imbalance: 0.0,
+        }
+    }
+
+    pub fn ambient_temperature(&self) -> f32 {
+        self.ambient
+    }
+
+    pub fn thermal_chunks(&self) -> usize {
+        self.thermal.len()
+    }
+
+    /// Temperature fields (16³ cells of 4³ voxels) of the chunks that have one; every
+    /// other chunk is at the ambient temperature.
+    pub fn thermal_fields(&self) -> impl Iterator<Item = (ChunkPos, &CellArray)> {
+        self.thermal.iter().map(|(p, f)| (*p, &*f.temp))
+    }
+
+    /// Temperature of the cell containing `pos`.
+    pub fn temperature_at(&self, pos: WorldPos) -> f32 {
+        let (c, l) = pos.to_chunk_local();
+        self.thermal
+            .get(&c)
+            .map_or(self.ambient, |f| f.temp[cell_of(l.as_ivec3())])
+    }
+
+    /// Energy changed on purpose rather than conserved: volume-preserving phase
+    /// changes and fields returned to ambient (ADR 007).
+    pub fn energy_imbalance(&self) -> f64 {
+        self.energy_imbalance
+    }
+
+    /// Total energy of the loaded world: sensible (capacity × temperature, ambient
+    /// for chunks without a field) plus latent. Walks every voxel; for tests.
+    pub fn total_energy(&self, world: &World) -> f64 {
+        let mut total = 0.0;
+        for (pos, chunk) in world.iter() {
+            total += match self.thermal.get(&pos) {
+                Some(f) => f.energy(),
+                None => ThermalChunk::new(chunk, &self.table, self.ambient).energy(),
+            };
+            for b in 0..mv_core::consts::BRICKS_PER_CHUNK {
+                total += match chunk.brick(b) {
+                    mv_world::BrickRef::Uniform(m) => {
+                        f64::from(self.table.thermal(m).latent) * 512.0
+                    }
+                    mv_world::BrickRef::Dense(v) => v
+                        .iter()
+                        .map(|&m| f64::from(self.table.thermal(m).latent))
+                        .sum(),
+                };
+            }
+        }
+        total
+    }
+
+    /// Reacts to an external edit of the world box `[min, max]`: wakes the
+    /// automaton there, updates the composition of temperature fields, and gives
+    /// voxels of `placed` (if any) their base temperature.
+    pub fn edited(
+        &mut self,
+        world: &World,
+        min: WorldPos,
+        max: WorldPos,
+        placed: Option<MaterialId>,
+    ) {
+        self.wake_box(world, min, max);
+        let (lo, hi) = (min.0.min(max.0), min.0.max(max.0));
+        let needs_field = placed.is_some_and(|m| {
+            self.table.thermal(m).base_temperature.is_some()
+                || unstable_at(&self.table, m, self.ambient, self.hysteresis)
+        });
+        let (clo, chi) = (WorldPos(lo).chunk().0, WorldPos(hi).chunk().0);
+        for cz in clo.z..=chi.z {
+            for cy in clo.y..=chi.y {
+                for cx in clo.x..=chi.x {
+                    let pos = ChunkPos::new(cx, cy, cz);
+                    let Some(chunk) = world.chunk(pos) else {
+                        continue;
+                    };
+                    let origin = pos.origin().0;
+                    let region = Aabb::new((lo - origin).as_ivec3(), (hi - origin).as_ivec3())
+                        .intersect(Aabb::CHUNK);
+                    match self.thermal.get_mut(&pos) {
+                        Some(f) => f.recompute(chunk, &self.table, region),
+                        None if needs_field => {
+                            let f = ThermalChunk::new(chunk, &self.table, self.ambient);
+                            self.thermal.insert(pos, f);
+                        }
+                        None => continue,
+                    }
+                    let (Some(m), Some(f)) = (placed, self.thermal.get_mut(&pos)) else {
+                        continue;
+                    };
+                    let p = *self.table.thermal(m);
+                    let Some(base) = p.base_temperature else {
+                        continue;
+                    };
+                    set_base_temperature(f, chunk, region, m, p.capacity, base);
+                }
+            }
         }
     }
 
@@ -183,27 +309,32 @@ impl Simulation {
                 .filter_map(|pos| {
                     let chunk = world.detach(pos)?;
                     let state = self.active.remove(&pos)?;
-                    Some((pos, chunk, state))
+                    let field = self.thermal.remove(&pos);
+                    Some((pos, chunk, state, field))
                 })
                 .collect();
             let shared: &World = world;
             let outs: Vec<TaskOut> = tasks
                 .par_iter_mut()
-                .map(|(pos, chunk, state)| {
+                .map(|(pos, chunk, state, field)| {
                     let mut view = View {
                         center: chunk,
                         neighbors: neighbors(shared, *pos),
                         origin: pos.origin().0,
+                        thermal: field.as_mut(),
                     };
                     automaton::process_chunk(&mut view, &mut state.moved, state.region, &ctx)
                 })
                 .collect();
 
             let mut finished = Vec::with_capacity(tasks.len());
-            for (pos, chunk, state) in tasks {
+            for (pos, chunk, state, field) in tasks {
                 stats.cells_scanned += state.region.volume();
                 world.attach(pos, chunk);
                 self.active.insert(pos, state);
+                if let Some(field) = field {
+                    self.thermal.insert(pos, field);
+                }
                 finished.push(pos);
             }
             for (pos, out) in finished.into_iter().zip(outs) {
@@ -225,7 +356,157 @@ impl Simulation {
                 }
             }
         }
+        stats.transitions = self.thermal_step(world);
+        stats.thermal_chunks = self.thermal.len();
         self.stats = stats;
+    }
+
+    /// Diffusion, growth/sleep of temperature fields, then phase changes.
+    /// Returns the number of voxels that changed material.
+    fn thermal_step(&mut self, world: &mut World) -> u32 {
+        if self.thermal.is_empty() {
+            return 0;
+        }
+        let _span = tracing::trace_span!("thermal_step", chunks = self.thermal.len()).entered();
+        self.thermal.retain(|p, _| world.contains(*p));
+        let mut positions: Vec<ChunkPos> = self.thermal.keys().copied().collect();
+        positions.sort_by_key(|p| (p.0.z, p.0.y, p.0.x));
+        self.diffuse(&positions);
+        self.grow_and_sleep(world, &positions);
+        self.phase_changes(world, &positions)
+    }
+
+    /// Jacobi diffusion: reads the old temperatures everywhere, writes new buffers.
+    fn diffuse(&mut self, positions: &[ChunkPos]) {
+        let _span = tracing::trace_span!("diffuse").entered();
+        while self.thermal_scratch.len() < positions.len() {
+            self.thermal_scratch.push(Box::new([0.0; CELLS]));
+        }
+        let params = DiffusionParams {
+            rate: self.diffusion_rate,
+        };
+        let fields = &self.thermal;
+        positions
+            .par_iter()
+            .zip(self.thermal_scratch.par_iter_mut())
+            .for_each(|(pos, out)| {
+                let nb = |d: IVec3| fields.get(&ChunkPos(pos.0 + d));
+                let neighbors = FACES.map(nb);
+                thermal::diffuse(&fields[pos], neighbors, params, out);
+            });
+        for (pos, buf) in positions.iter().zip(self.thermal_scratch.iter_mut()) {
+            if let Some(f) = self.thermal.get_mut(pos) {
+                std::mem::swap(&mut f.temp, buf);
+            }
+        }
+    }
+
+    /// Gives a field to neighbours whose shared face deviates from ambient, and
+    /// drops fields that stayed at ambient for `sleep_after` ticks.
+    fn grow_and_sleep(&mut self, world: &World, positions: &[ChunkPos]) {
+        let mut create = Vec::new();
+        let mut idle = Vec::new();
+        for pos in positions {
+            let f = &self.thermal[pos];
+            for d in FACES {
+                let n = ChunkPos(pos.0 + d);
+                if !self.thermal.contains_key(&n)
+                    && world.contains(n)
+                    && f.face_deviates(d, self.ambient, self.epsilon)
+                {
+                    create.push(n);
+                }
+            }
+            if f.max_deviation(self.ambient) < self.epsilon {
+                idle.push(*pos);
+            }
+        }
+        for pos in idle {
+            let sleep_after = self.sleep_after;
+            let Some(f) = self.thermal.get_mut(&pos) else {
+                continue;
+            };
+            f.idle_ticks += 1;
+            if f.idle_ticks > sleep_after
+                && let Some(f) = self.thermal.remove(&pos)
+            {
+                let cap: f64 = f.cap.iter().map(|&c| f64::from(c)).sum();
+                self.energy_imbalance += f64::from(self.ambient) * cap - f.energy();
+            }
+        }
+        for pos in create {
+            if self.thermal.contains_key(&pos) {
+                continue;
+            }
+            if let Some(chunk) = world.chunk(pos) {
+                let f = ThermalChunk::new(chunk, &self.table, self.ambient);
+                self.thermal.insert(pos, f);
+            }
+        }
+    }
+
+    /// Temperature-driven material changes, chunk by chunk in parallel (they only
+    /// touch their own chunk). Returns the number of voxels changed.
+    fn phase_changes(&mut self, world: &mut World, positions: &[ChunkPos]) -> u32 {
+        let _span = tracing::trace_span!("phase_changes").entered();
+        let mut tasks: Vec<_> = positions
+            .iter()
+            .filter_map(|&pos| {
+                let field = self.thermal.remove(&pos)?;
+                let Some(chunk) = world.detach(pos) else {
+                    self.thermal.insert(pos, field);
+                    return None;
+                };
+                Some((pos, chunk, field))
+            })
+            .collect();
+        let params = TransitionParams {
+            hysteresis: self.hysteresis,
+            rate: self.transition_rate,
+            seed: self.seed,
+            tick: self.tick,
+        };
+        let table = Arc::clone(&self.table);
+        let outs: Vec<_> = tasks
+            .par_iter_mut()
+            .map(|(pos, chunk, field)| {
+                thermal::transitions(chunk, field, pos.origin().0, &table, params)
+            })
+            .collect();
+        let mut count = 0;
+        for ((pos, chunk, mut field), out) in tasks.into_iter().zip(outs) {
+            if out.count > 0 {
+                field.idle_ticks = 0;
+            }
+            world.attach(pos, chunk);
+            self.thermal.insert(pos, field);
+            self.energy_imbalance += out.imbalance;
+            count += out.count;
+            if !out.changed.is_empty() {
+                world.mark_edited(pos);
+                let origin = pos.origin().0;
+                let changed = out.changed.expand(1);
+                self.mark_dirty(
+                    world,
+                    origin + changed.min.as_i64vec3(),
+                    origin + changed.max.as_i64vec3(),
+                );
+            }
+        }
+        count
+    }
+
+    /// Gives `pos` a temperature field if a voxel of `m` arriving at `t` needs one.
+    fn ensure_field_for(&mut self, world: &World, pos: ChunkPos, m: MaterialId, t: f32) {
+        if self.thermal.contains_key(&pos) {
+            return;
+        }
+        let needed = (t - self.ambient).abs() > self.epsilon
+            || unstable_at(&self.table, m, self.ambient, self.hysteresis);
+        if needed && let Some(chunk) = world.chunk(pos) {
+            let f = ThermalChunk::new(chunk, &self.table, self.ambient);
+            self.thermal.insert(pos, f);
+        }
     }
 
     /// Promotes pending regions, puts idle chunks to sleep and groups the active
@@ -278,8 +559,23 @@ impl Simulation {
         {
             return false;
         }
+        // Energy travels with the voxels. Fields are created before the swap so their
+        // composition does not count the incoming voxel twice.
+        let (cs, ls) = mv.src.to_chunk_local();
+        let (cd, ld) = mv.dst.to_chunk_local();
+        let (ts, td) = (self.temperature_at(mv.src), self.temperature_at(mv.dst));
+        self.ensure_field_for(world, cd, mv.src_material, ts);
+        self.ensure_field_for(world, cs, mv.dst_material, td);
         world.set_voxel(mv.src, mv.dst_material);
         world.set_voxel(mv.dst, mv.src_material);
+        let c_src = self.table.thermal(mv.src_material).capacity;
+        let c_dst = self.table.thermal(mv.dst_material).capacity;
+        if let Some(f) = self.thermal.get_mut(&cs) {
+            f.replace_voxel(cell_of(ls.as_ivec3()), c_src, c_dst, td);
+        }
+        if let Some(f) = self.thermal.get_mut(&cd) {
+            f.replace_voxel(cell_of(ld.as_ivec3()), c_dst, c_src, ts);
+        }
         // The voxel must not move again this tick when its new chunk is processed.
         let (cpos, local) = mv.dst.to_chunk_local();
         let index = local.index();
@@ -288,6 +584,48 @@ impl Simulation {
             self.mark_dirty(world, p - 1, p + 1);
         }
         true
+    }
+}
+
+/// Face directions in the order expected by [`thermal::diffuse`].
+const FACES: [IVec3; 6] = [
+    IVec3::NEG_X,
+    IVec3::X,
+    IVec3::NEG_Y,
+    IVec3::Y,
+    IVec3::NEG_Z,
+    IVec3::Z,
+];
+
+/// Sets the cells of `region` towards `base` in proportion to how much of their
+/// capacity is voxels of `m` (freshly placed material arrives at its base
+/// temperature; the rest of the cell keeps its temperature).
+fn set_base_temperature(
+    f: &mut ThermalChunk,
+    chunk: &mv_world::Chunk,
+    region: Aabb,
+    m: MaterialId,
+    capacity: f32,
+    base: f32,
+) {
+    let mut counts = vec![0u32; CELLS];
+    for z in region.min.z..=region.max.z {
+        for y in region.min.y..=region.max.y {
+            for x in region.min.x..=region.max.x {
+                let lp = mv_core::LocalPos::new(x as u8, y as u8, z as u8);
+                if chunk.get(lp) == m {
+                    counts[cell_of(IVec3::new(x, y, z))] += 1;
+                }
+            }
+        }
+    }
+    for (c, &n) in counts.iter().enumerate() {
+        if n > 0 {
+            let added = n as f32 * capacity;
+            let cap = f.cap[c].max(1e-3);
+            let rest = (cap - added).max(0.0);
+            f.temp[c] = (f.temp[c] * rest + base * added) / cap;
+        }
     }
 }
 
@@ -310,3 +648,5 @@ fn neighbors(world: &World, pos: ChunkPos) -> [Option<&mv_world::Chunk>; 27] {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_thermal;

@@ -23,6 +23,7 @@ use mv_world::{BrickRef, Chunk, MaterialId};
 use crate::aabb::Aabb;
 use crate::rng;
 use crate::table::{Kind, MaterialTable, Props};
+use crate::thermal::{ThermalChunk, cell_of};
 
 const N: i32 = CHUNK_SIZE as i32;
 /// Words of the per-chunk "moved this tick" bitset (one bit per voxel).
@@ -82,6 +83,8 @@ pub struct View<'a> {
     pub neighbors: [Option<&'a Chunk>; 27],
     /// World position of the chunk's minimum corner.
     pub origin: I64Vec3,
+    /// Temperature field of the chunk, if it has one (moves carry energy).
+    pub thermal: Option<&'a mut ThermalChunk>,
 }
 
 impl std::fmt::Debug for View<'_> {
@@ -255,6 +258,15 @@ impl Sweep<'_, '_> {
         if inside(q) {
             self.view.center.set(local(p), t);
             self.view.center.set(local(q), m);
+            if let Some(field) = self.view.thermal.as_deref_mut() {
+                let table = self.ctx.table;
+                field.advect(
+                    cell_of(p),
+                    cell_of(q),
+                    table.thermal(m).capacity,
+                    table.thermal(t).capacity,
+                );
+            }
             let i = local(q).index();
             self.moved[i >> 6] |= 1 << (i & 63);
             self.out.changed.include(p);

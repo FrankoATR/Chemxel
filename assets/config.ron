@@ -12,6 +12,11 @@
         max_ticks_per_frame: 4,
         seed: 12648430,
         sleep_after_ticks: 2,    // ticks without changes before a chunk sleeps
+        ambient_temperature: 20.0,
+        diffusion_rate: 300.0,  // heat diffusion speed
+        transition_rate: 0.1,    // probability per tick of a phase change past its threshold
+        transition_hysteresis: 2.0,
+        thermal_epsilon: 0.5,    // °C from ambient where temperature fields sleep/grow
     ),
     render: (
         vsync: true,
@@ -21,6 +26,7 @@
         brick_pool_capacity: 262144,
         chunk_slot_capacity: 8192,   // 2 KiB each
         upload_budget_kib: 8192,     // streamed data per frame; edits are never delayed
+        heat_view_capacity: 1024,    // temperature fields shown by F5 (16 KiB each)
         fov_y_deg: 70.0,
     ),
     world: (

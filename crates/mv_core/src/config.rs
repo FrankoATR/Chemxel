@@ -68,8 +68,21 @@ pub struct SimConfig {
     pub max_ticks_per_frame: u32,
     /// Seed for deterministic simulation randomness and world generation.
     pub seed: u64,
-    /// Ticks without changes before an active chunk falls asleep.
+    /// Ticks without changes before an active chunk (or a temperature field that
+    /// returned to ambient) falls asleep.
     pub sleep_after_ticks: u32,
+    /// Temperature of everything without a temperature field, °C.
+    pub ambient_temperature: f32,
+    /// Heat diffusion speed (multiplies the harmonic mean of the conductivities).
+    pub diffusion_rate: f32,
+    /// Probability per tick that a voxel past a transition temperature changes.
+    pub transition_rate: f32,
+    /// Margin past a transition temperature before it triggers, °C (avoids
+    /// melting/freezing back and forth at the threshold).
+    pub transition_hysteresis: f32,
+    /// A temperature field within this many °C of ambient everywhere may sleep, and
+    /// neighbours get a field once a shared face deviates by more.
+    pub thermal_epsilon: f32,
 }
 
 impl Default for SimConfig {
@@ -79,6 +92,11 @@ impl Default for SimConfig {
             max_ticks_per_frame: 4,
             seed: 0x00C0_FFEE,
             sleep_after_ticks: 2,
+            ambient_temperature: 20.0,
+            diffusion_rate: 300.0,
+            transition_rate: 0.1,
+            transition_hysteresis: 2.0,
+            thermal_epsilon: 0.5,
         }
     }
 }
@@ -98,6 +116,8 @@ pub struct RenderConfig {
     pub chunk_slot_capacity: u32,
     /// Max bytes of streamed chunk data uploaded per frame (edits are never delayed).
     pub upload_budget_kib: u32,
+    /// Temperature fields the heat view (F5) can show at once (16 KiB each).
+    pub heat_view_capacity: u32,
     /// Vertical field of view in degrees.
     pub fov_y_deg: f32,
 }
@@ -111,6 +131,7 @@ impl Default for RenderConfig {
             brick_pool_capacity: 262_144,
             chunk_slot_capacity: 8192,
             upload_budget_kib: 8192,
+            heat_view_capacity: 1024,
             fov_y_deg: 70.0,
         }
     }
@@ -286,6 +307,19 @@ impl Config {
         }
         if self.render.brick_pool_capacity == 0 {
             return invalid("render.brick_pool_capacity", "must be at least 1");
+        }
+        let sim = &self.sim;
+        if !(sim.diffusion_rate >= 0.0 && (0.0..=1.0).contains(&sim.transition_rate)) {
+            return invalid(
+                "sim.diffusion_rate/transition_rate",
+                "diffusion_rate must be >= 0 and transition_rate in 0..=1",
+            );
+        }
+        if !(sim.thermal_epsilon > 0.0 && sim.transition_hysteresis >= 0.0) {
+            return invalid(
+                "sim.thermal_epsilon/transition_hysteresis",
+                "epsilon must be > 0 and hysteresis >= 0",
+            );
         }
         if self.render.chunk_slot_capacity == 0 {
             return invalid("render.chunk_slot_capacity", "must be at least 1");
