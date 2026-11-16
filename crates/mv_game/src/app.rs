@@ -188,8 +188,7 @@ impl App {
 
     fn redraw(&mut self) {
         let (dt, fps) = self.frame_timer.tick();
-        let timings = &mut self.stats.timings;
-        timings.frame.add(dt.as_secs_f64() * 1000.0);
+        self.stats.timings.frame.add(dt.as_secs_f64() * 1000.0);
 
         let t = Instant::now();
         let ticks = self.timestep.advance(dt);
@@ -200,24 +199,30 @@ impl App {
                 b.record_tick(tick_start.elapsed(), &self.sim.stats());
             }
         }
+        let ready = self.world.is_idle();
+        let (mut spawn, mut finished) = (None, false);
         if let Some(b) = self.bench_drop.as_mut() {
-            if b.should_drop(self.world.is_idle()) {
-                let ground = mv_core::WorldPos(
-                    self.camera.position.floor().as_i64vec3() - glam::I64Vec3::Y * 48,
-                );
-                let boxes =
-                    drop_test::drop_sand_and_water(&mut self.world.world, &self.registry, ground);
-                for (min, max) in boxes {
-                    self.sim.wake_box(&self.world.world, min, max);
-                }
-            } else if b.advance(dt) {
-                tracing::info!("{}", b.report());
-                self.bench_drop = None;
-                self.exit_requested = true;
+            if b.should_drop(ready) {
+                spawn = Some(b.scenario);
+            } else {
+                finished = b.advance(dt);
             }
         }
+        if let Some(scenario) = spawn {
+            if scenario == drop_test::Scenario::LavaOnIce
+                && let Some(r) = self.running.as_mut()
+            {
+                r.renderer.set_heat_view(true);
+            }
+            self.spawn_scenario(self.ground_below_camera(), scenario);
+        }
+        if finished && let Some(b) = self.bench_drop.take() {
+            tracing::info!("{}", b.report());
+            self.exit_requested = true;
+        }
         if ticks > 0 {
-            timings
+            self.stats
+                .timings
                 .sim
                 .add(t.elapsed().as_secs_f64() * 1000.0 / f64::from(ticks));
         }
@@ -250,10 +255,14 @@ impl App {
         }
 
         let t = Instant::now();
-        if let Some((min, max)) = self.editor.update(&mut self.world.world, &self.camera, dt) {
-            self.sim.wake_box(&self.world.world, min, max);
+        if let Some(edit) = self.editor.update(&mut self.world.world, &self.camera, dt) {
+            self.sim
+                .edited(&self.world.world, edit.min, edit.max, edit.placed);
         }
-        timings.editor.add(t.elapsed().as_secs_f64() * 1000.0);
+        self.stats
+            .timings
+            .editor
+            .add(t.elapsed().as_secs_f64() * 1000.0);
 
         let Some(running) = self.running.as_mut() else {
             return;
@@ -289,6 +298,11 @@ impl App {
                 sim: &sim_stats,
                 sim_active: self.sim.active_chunks(),
                 sim_paused: self.sim.is_paused(),
+                heat_view: running.renderer.heat_view(),
+                target_temperature: self
+                    .editor
+                    .target()
+                    .map(|hit| self.sim.temperature_at(hit.voxel)),
                 camera: self.camera.position,
                 sync: &self.stats.sync,
                 world: &self.stats.world,
@@ -312,6 +326,12 @@ impl App {
         let Some(running) = self.running.as_mut() else {
             return;
         };
+
+        if running.renderer.heat_view() {
+            running
+                .renderer
+                .upload_heat(self.sim.ambient_temperature(), self.sim.thermal_fields());
+        }
 
         let t = Instant::now();
         let gui = &mut running.gui;
@@ -353,21 +373,31 @@ impl App {
         if actions.toggle_pause {
             self.sim.set_paused(!self.sim.is_paused());
         }
-        if actions.drop_test {
-            // Above the voxel under the crosshair, or below the camera.
-            let ground = self.editor.target().map_or_else(
-                || {
-                    mv_core::WorldPos(
-                        self.camera.position.floor().as_i64vec3() - glam::I64Vec3::Y * 60,
-                    )
-                },
-                |hit| hit.voxel,
-            );
-            let boxes =
-                drop_test::drop_sand_and_water(&mut self.world.world, &self.registry, ground);
-            for (min, max) in boxes {
-                self.sim.wake_box(&self.world.world, min, max);
-            }
+        let scenario = if actions.drop_test {
+            Some(drop_test::Scenario::SandAndWater)
+        } else if actions.lava_on_ice {
+            Some(drop_test::Scenario::LavaOnIce)
+        } else {
+            None
+        };
+        if let Some(scenario) = scenario {
+            // On the voxel under the crosshair, or below the camera.
+            let ground = self
+                .editor
+                .target()
+                .map_or_else(|| self.ground_below_camera(), |hit| hit.voxel);
+            self.spawn_scenario(ground, scenario);
+        }
+    }
+
+    fn ground_below_camera(&self) -> mv_core::WorldPos {
+        mv_core::WorldPos(self.camera.position.floor().as_i64vec3() - glam::I64Vec3::Y * 48)
+    }
+
+    fn spawn_scenario(&mut self, ground: mv_core::WorldPos, scenario: drop_test::Scenario) {
+        for p in drop_test::spawn(&mut self.world.world, &self.registry, ground, scenario) {
+            self.sim
+                .edited(&self.world.world, p.min, p.max, Some(p.material));
         }
     }
 
@@ -385,6 +415,12 @@ impl App {
                 }
                 KeyCode::F3 => self.show_overlay = !self.show_overlay,
                 KeyCode::KeyP => self.sim.set_paused(!self.sim.is_paused()),
+                KeyCode::F5 => {
+                    if let Some(r) = self.running.as_mut() {
+                        let on = !r.renderer.heat_view();
+                        r.renderer.set_heat_view(on);
+                    }
+                }
                 _ => {
                     if let Some(index) = digit_index(key) {
                         self.editor.select(index);

@@ -28,8 +28,13 @@ fn main() -> anyhow::Result<()> {
     let registry =
         MaterialRegistry::load_dir(&assets.join("materials")).context("loading materials")?;
     let world = game_world::GameWorld::new(&config, &registry)?;
+    let secs = std::time::Duration::from_secs_f64;
     let bench_drop = seconds_arg("--bench-drop")
-        .map(|s| bench_drop::BenchDrop::new(std::time::Duration::from_secs_f64(s)));
+        .map(|s| bench_drop::BenchDrop::new(drop_test::Scenario::SandAndWater, secs(s)))
+        .or_else(|| {
+            seconds_arg("--bench-heat")
+                .map(|s| bench_drop::BenchDrop::new(drop_test::Scenario::LavaOnIce, secs(s)))
+        });
     let bench = seconds_arg("--bench-fly").map(|seconds| {
         let c = &config.controls;
         let speed = c.fly_speed * c.fast_multiplier * mv_core::consts::VOXELS_PER_BLOCK as f32;

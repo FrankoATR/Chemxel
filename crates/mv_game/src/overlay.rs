@@ -49,6 +49,8 @@ pub struct OverlayData<'a> {
     pub sim: &'a TickStats,
     pub sim_active: usize,
     pub sim_paused: bool,
+    pub heat_view: bool,
+    pub target_temperature: Option<f32>,
     pub camera: DVec3,
     pub sync: &'a SyncStats,
     pub world: &'a WorldStats,
@@ -63,6 +65,7 @@ const MIB: f64 = 1024.0 * 1024.0;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OverlayActions {
     pub drop_test: bool,
+    pub lava_on_ice: bool,
     pub toggle_pause: bool,
 }
 
@@ -109,7 +112,24 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
             format!("{} ({} across borders)", s.moves, s.border_moves),
         );
         row(ui, "Cells scanned", format!("{}", s.cells_scanned));
+        row(
+            ui,
+            "Thermal",
+            format!(
+                "{} chunks, {} phase changes/tick",
+                s.thermal_chunks, s.transitions
+            ),
+        );
+        row(
+            ui,
+            "Target temp.",
+            d.target_temperature
+                .map_or_else(|| "-".to_owned(), |t| format!("{t:.1} °C")),
+        );
     });
+    if d.heat_view {
+        ui.small("Heat view (F5): blue < ambient · grey ambient · yellow 100 °C · orange 600 °C · white 1500 °C");
+    }
     ui.horizontal(|ui| {
         if ui
             .button("Drop 100k sand + water")
@@ -117,6 +137,13 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
             .clicked()
         {
             actions.drop_test = true;
+        }
+        if ui
+            .button("Lava on ice")
+            .on_hover_text("On the voxel under the crosshair")
+            .clicked()
+        {
+            actions.lava_on_ice = true;
         }
         let label = if d.sim_paused {
             "Resume (P)"
@@ -277,7 +304,7 @@ fn brush(ui: &mut egui::Ui, registry: &MaterialRegistry, editor: &mut Editor) {
 
 fn help(ui: &mut egui::Ui, grabbed: bool) {
     let text = if grabbed {
-        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD/Space/Ctrl move · Shift fast · Esc release mouse · F3 overlay"
+        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD/Space/Ctrl move · Shift fast · Esc release mouse · F3 overlay · F5 heat view"
     } else {
         "Click the world to capture the mouse · Esc quits · F3 overlay"
     };
