@@ -1,0 +1,64 @@
+//! On-disk (RON) representation of materials. Names are resolved to ids by the
+//! registry; nothing outside this crate sees these types.
+
+use serde::Deserialize;
+
+use crate::MatterState;
+
+/// One entry of a `assets/materials/*.ron` file. The Rust name must be `Material`
+/// because RON checks the struct name written in the file (`Material(...)`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Material {
+    pub name: String,
+    pub state: MatterState,
+    /// kg/m³. Decides who sinks and who floats.
+    pub density: f32,
+    /// sRGB colour with alpha (0 = fully transparent).
+    pub color: (u8, u8, u8, u8),
+    /// W/(m·K).
+    #[serde(default)]
+    pub conductivity: f32,
+    /// kJ/(kg·K).
+    #[serde(default = "default_heat_capacity")]
+    pub heat_capacity: f32,
+    /// Emitted light intensity (0 = none).
+    #[serde(default)]
+    pub emissive: f32,
+    /// Max horizontal cells a liquid/gas spreads per tick.
+    #[serde(default)]
+    pub dispersion: u8,
+    /// Random lifetime range in ticks; the voxel disappears when it expires.
+    #[serde(default)]
+    pub lifetime: Option<(u32, u32)>,
+    /// Temperature the material is created at and tends to (°C).
+    #[serde(default)]
+    pub base_temperature: Option<f32>,
+
+    #[serde(default)]
+    pub melt_at: Option<f32>,
+    #[serde(default)]
+    pub melts_into: Option<String>,
+    #[serde(default)]
+    pub boil_at: Option<f32>,
+    #[serde(default)]
+    pub boils_into: Option<String>,
+    #[serde(default)]
+    pub freeze_at: Option<f32>,
+    #[serde(default)]
+    pub freezes_into: Option<String>,
+
+    #[serde(default)]
+    pub flammable: bool,
+    #[serde(default)]
+    pub ignite_at: Option<f32>,
+    #[serde(default)]
+    pub burns_into: Option<String>,
+    /// Probability per tick that a burning voxel is consumed.
+    #[serde(default)]
+    pub burn_rate: f32,
+}
+
+fn default_heat_capacity() -> f32 {
+    1.0
+}

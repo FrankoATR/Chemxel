@@ -16,10 +16,10 @@ publish = false
 #   mv_render -> mv_core, mv_world        mv_game -> everything
 # An internal crate is listed here only once another crate actually uses it
 # (cargo warns about unused workspace dependencies). Pending:
-#   mv_materials = { path = "crates/mv_materials" }
-#   mv_world = { path = "crates/mv_world" }
 #   mv_physics = { path = "crates/mv_physics" }
 mv_core = { path = "crates/mv_core" }
+mv_materials = { path = "crates/mv_materials" }
+mv_world = { path = "crates/mv_world" }
 mv_sim = { path = "crates/mv_sim" }
 mv_render = { path = "crates/mv_render" }
 
@@ -28,6 +28,7 @@ mv_render = { path = "crates/mv_render" }
 wgpu = "30.0.2"
 winit = "0.30.13"
 glam = { version = "0.34.3", features = ["serde", "bytemuck"] }
+bytemuck = { version = "1.25.2", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 ron = "0.12.3"
 thiserror = "2.0.21"

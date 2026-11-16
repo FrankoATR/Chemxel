@@ -1,5 +1,14 @@
-//! Material and chemical reaction registry.
+//! Material registry.
 //!
-//! Materials and reactions are defined in `assets/materials/*.ron` and
-//! `assets/reactions/*.ron` and loaded into a contiguous, `MaterialId`-indexed table
-//! at startup. Implemented in milestone 3; see `PROMPT.md` §5.3 and §8.
+//! Materials are defined in `assets/materials/*.ron` (schema documented in this
+//! crate's `README.md`) and loaded at startup into a contiguous table indexed by
+//! [`MaterialId`], so hot loops can fetch properties with a plain array access.
+//!
+//! Chemical reactions (`assets/reactions/*.ron`) are added in milestone 5.
+
+mod def;
+mod registry;
+
+pub use registry::{
+    Material, MaterialId, MaterialRegistry, MatterState, RegistryError, Transition,
+};

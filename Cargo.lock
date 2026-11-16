@@ -986,6 +986,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "mv_core",
+ "mv_world",
 ]
 
 [[package]]
@@ -1004,9 +1005,12 @@ name = "mv_game"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "glam",
  "mv_core",
+ "mv_materials",
  "mv_render",
  "mv_sim",
+ "mv_world",
  "pollster",
  "tracing",
  "tracing-subscriber",
@@ -1017,6 +1021,12 @@ dependencies = [
 [[package]]
 name = "mv_materials"
 version = "0.1.0"
+dependencies = [
+ "ron",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
+]
 
 [[package]]
 name = "mv_physics"
@@ -1026,6 +1036,10 @@ version = "0.1.0"
 name = "mv_render"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "glam",
+ "mv_core",
+ "mv_world",
  "thiserror 2.0.21",
  "tracing",
  "wgpu",
@@ -1041,6 +1055,10 @@ dependencies = [
 [[package]]
 name = "mv_world"
 version = "0.1.0"
+dependencies = [
+ "mv_core",
+ "mv_materials",
+]
 
 [[package]]
 name = "naga"
