@@ -314,7 +314,7 @@ Controles (objetivo): `WASD` mover · `Espacio/Ctrl` subir/bajar · `Shift` ráp
 | Hito | Estado | Notas / métricas |
 |---|---|---|
 | 0 — Esqueleto | ✅ Completado (2026-11-16) | Workspace de 7 crates + `benches/`. wgpu 30.0.2 / winit 0.30.13 (compatibles con egui 0.37). Ventana estable, adaptador logueado (RTX 5060 Laptop, Vulkan, `Bgra8UnormSrgb`). Tick fijo 30 Hz verificado (30 ticks/s a 60 FPS con vsync). 20 tests (coords exhaustivos incl. negativos, timestep, config). Bench: `world_to_chunk_local` 4096 conv. = 2,46 µs; roundtrip de índice de un chunk completo (262 144) = 56 µs. ADR 001 (tracing/Tracy) y 002 (convenciones del workspace). |
-| 1 — Chunk raymarcheado | ⬜ Pendiente | |
+| 1 — Chunk raymarcheado | ✅ Completado (2026-11-16) | Chunk 64³ uniforme/denso + `BrickMask`; escena de prueba (terreno sinusoidal, agua, esferas de arena y lava). `MaterialRegistry` desde RON adelantado del hito 3 (el render necesita la tabla de colores). Brickmap en storage buffers (ADR 003), compute DDA bricks→vóxeles, HDR + tonemap ACES, cámara fly con posición `f64`. **~3 600 FPS (0,28 ms) a 1920×1080 sin vsync** en RTX 5060 Laptop (objetivo ≥144). 281 bricks subidos. 45 tests. Bench: generar chunk de prueba 4,2 ms (altura calculada por vóxel; optimizar por columna en hito 2), copiar 512 bricks 25 µs, ocupación 31 µs. |
 | 2 — Mundo y edición | ⬜ Pendiente | |
 | 3 — Autómata celular | ⬜ Pendiente | |
 | 4 — Temperatura | ⬜ Pendiente | |

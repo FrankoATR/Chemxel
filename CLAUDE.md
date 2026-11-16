@@ -28,12 +28,12 @@ Bash de la herramienta: `export PATH="$HOME/.cargo/bin:$PATH"`).
 ```
 crates/
   mv_core       coords (WorldPos/ChunkPos/LocalPos), constantes, FixedTimestep, Config, paths
-  mv_materials  registro de materiales y reacciones desde RON           (hito 3+)
-  mv_world      chunks SoA, paleta, streaming, generación               (hito 1+)
+  mv_materials  registro de materiales (RON); reacciones en hito 5
+  mv_world      Chunk 64³ (uniforme/denso), BrickMask, testgen; streaming en hito 2
   mv_sim        simulación headless: autómata, temperatura, reacciones  (hito 3+)
   mv_physics    puente rapier3d                                          (hito 6)
-  mv_render     wgpu: GpuContext, Renderer, brickmaps, raymarching
-  mv_game       binario: loop (tick fijo + render variable), input, cámara, egui
+  mv_render     wgpu: GpuContext, Camera, GpuVolume (brickmap), raymarch + blit
+  mv_game       binario: App (loop), FlyController, InputState, Scene; egui en hito 2
 benches/        paquete mv_benches (Criterion)
 assets/         config.ron, materials/*.ron, reactions/*.ron, shaders/*.wgsl
 docs/decisions/ ADRs (NNN-titulo.md)
@@ -53,6 +53,22 @@ la regla es cero warnings). Al añadir una, descomentarla también en
 Cada frame: `FrameTimer::tick` → `FixedTimestep::advance(dt)` devuelve N ticks →
 `Simulation::step()` N veces → `Renderer::render()`. El render nunca muta la simulación.
 El `FixedTimestep` limita los ticks por frame y descarta el atraso (evita la espiral de muerte).
+
+### Render (`mv_render`, ADR 003)
+
+`Renderer::render(&Camera)`: `GpuVolume::flush` → compute `raymarch.wgsl` (DDA bricks 8³ →
+vóxeles, salida HDR `rgba16float`) → `blit.wgsl` (tonemap ACES) → swapchain sRGB.
+Datos GPU: `chunk_grid` (celda → slot de chunk) → `chunk_bricks` (512 por chunk → slot de
+brick) → `brick_pool` (512 × `u16` por brick, 2 por `u32`). `EMPTY = u32::MAX`.
+Subida incremental: `Renderer::upload_chunk` solo sube los bricks de `Chunk::take_dirty_bricks`.
+La cámara guarda la posición en `f64` (microvóxeles); la GPU recibe coordenadas relativas
+al origen del volumen. Si cambias un struct compartido con WGSL (`FrameUniform`,
+`MaterialGpu`), cambia también el shader.
+
+### Materiales (`mv_materials`)
+
+`MaterialRegistry::load_dir("assets/materials")` → tabla contigua por `MaterialId(u16)`;
+`air` siempre es id 0. Esquema documentado en `crates/mv_materials/README.md`.
 
 ### Convenciones de datos
 

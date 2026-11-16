@@ -16,7 +16,7 @@ Minecraft (mundo por chunks, construcción).
 | Hito | Estado |
 |---|---|
 | 0 — Esqueleto | ✅ Completado |
-| 1 — Chunk raymarcheado | ⬜ Pendiente |
+| 1 — Chunk raymarcheado | ✅ Completado |
 | 2 — Mundo y edición | ⬜ Pendiente |
 | 3 — Autómata celular | ⬜ Pendiente |
 | 4 — Temperatura | ⬜ Pendiente |
@@ -25,8 +25,9 @@ Minecraft (mundo por chunks, construcción).
 | 7 — Iluminación | ⬜ Pendiente |
 | 8 — Jugador y guardado | ⬜ Pendiente |
 
-Hoy el juego abre una ventana, inicializa la GPU con `wgpu` y corre el loop principal
-(simulación a 30 Hz fijos desacoplada del render). El detalle y las métricas de cada hito
+Hoy el juego muestra un chunk de prueba (terreno sinusoidal con agua, una esfera de arena y
+otra de lava) renderizado por raymarching en GPU, con cámara libre. La simulación corre a
+30 Hz fijos, desacoplada del render. El detalle y las métricas de cada hito
 están en la sección "Estado del proyecto" de [PROMPT.md](PROMPT.md#12-estado-del-proyecto).
 
 ## Requisitos
@@ -45,6 +46,9 @@ cargo bench -p mv_benches        # benchmarks (Criterion)
 ./scripts/ci.sh                  # chequeos completos (Windows: .\scripts\ci.ps1)
 ```
 
+Materiales: `assets/materials/*.ron` (esquema en
+[crates/mv_materials/README.md](crates/mv_materials/README.md)).
+
 Profiling con [Tracy](https://github.com/wolfpld/tracy):
 
 ```bash
@@ -56,19 +60,23 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 
 ## Configuración
 
-`assets/config.ron` contiene los parámetros ajustables (tamaño de ventana, vsync, tick
-rate, semilla, distancia de render...). Todos los campos son opcionales. Para usar otra
-carpeta de assets: variable de entorno `CHEMXEL_ASSETS_DIR`.
+`assets/config.ron` contiene los parámetros ajustables (ventana, vsync, tick rate, semilla,
+distancia de render, campo de visión, memoria del brick pool, velocidad de la cámara y
+sensibilidad del ratón). Todos los campos son opcionales. Para medir FPS reales, pon
+`vsync: false`. Para usar otra carpeta de assets: variable de entorno `CHEMXEL_ASSETS_DIR`.
 
 ## Controles
 
 | Tecla | Acción |
 |---|---|
-| `Esc` | Salir |
+| `Click izq.` | Capturar el ratón (mirar con el ratón) |
+| `WASD` | Moverse |
+| `Espacio` / `Ctrl izq.` | Subir / bajar |
+| `Shift` | Más rápido |
+| `Esc` | Soltar el ratón; si ya está suelto, salir |
 
-Controles previstos (hitos siguientes): `WASD` mover · `Espacio/Ctrl` subir/bajar ·
-`Shift` rápido · `Click izq.` quitar · `Click der.` poner · `Rueda` radio del pincel ·
-`1–9` material · `F3` overlay de depuración · `F5` vista de temperatura.
+Controles previstos (hitos siguientes): `Click izq./der.` quitar/poner · `Rueda` radio del
+pincel · `1–9` material · `F3` overlay de depuración · `F5` vista de temperatura.
 
 ## Estructura
 
