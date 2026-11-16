@@ -1,13 +1,13 @@
-//! Frame orchestration: uploads, raymarch compute pass, blit, present.
+//! Frame orchestration: uploads, raymarch compute pass, blit, overlay, present.
 
-use glam::Vec3;
+use glam::{DVec3, Vec3};
 use mv_core::ChunkPos;
 use mv_world::Chunk;
 
 use crate::blit::BlitPass;
 use crate::camera::Camera;
 use crate::context::{GpuContext, SurfaceSize};
-use crate::gpu_volume::{GpuVolume, MaterialGpu, UploadStats, VolumeDesc};
+use crate::gpu_volume::{GpuVolume, MaterialGpu, UploadStats, VolumeDesc, VolumeStats};
 use crate::raymarch::{FrameUniform, RaymarchPass};
 
 /// Per-frame information returned to the caller (for overlays and logs).
@@ -15,6 +15,23 @@ use crate::raymarch::{FrameUniform, RaymarchPass};
 pub struct FrameStats {
     /// Whether a frame was actually presented (false when the surface was skipped).
     pub presented: bool,
+}
+
+/// Brush sphere highlighted in the frame, in world microvoxel coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct BrushPreview {
+    pub center: DVec3,
+    pub radius: f32,
+}
+
+/// What an overlay (e.g. the debug UI) needs to draw on top of the frame.
+#[derive(Debug)]
+pub struct OverlayTarget<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    /// Swapchain view, already containing the tonemapped frame.
+    pub view: &'a wgpu::TextureView,
+    pub size: SurfaceSize,
 }
 
 /// Top-level renderer. Owns the GPU context, the voxel volume and every pass.
@@ -25,6 +42,7 @@ pub struct Renderer {
     raymarch: RaymarchPass,
     blit: BlitPass,
     sun_dir: Vec3,
+    fog_k: f32,
 }
 
 impl Renderer {
@@ -38,6 +56,7 @@ impl Renderer {
             raymarch,
             blit,
             sun_dir: Vec3::new(0.45, 0.8, 0.35).normalize(),
+            fog_k: 0.0,
         }
     }
 
@@ -45,8 +64,8 @@ impl Renderer {
         &self.ctx
     }
 
-    pub fn volume(&self) -> &GpuVolume {
-        &self.volume
+    pub fn volume_stats(&self) -> VolumeStats {
+        self.volume.stats()
     }
 
     pub fn resize(&mut self, size: SurfaceSize) {
@@ -63,13 +82,42 @@ impl Renderer {
         self.volume.set_materials(&self.ctx.queue, materials);
     }
 
+    /// Distance in microvoxels at which fog fully hides the scene.
+    pub fn set_view_distance(&mut self, voxels: f32) {
+        // 1 - exp(-(t*k)^2) reaches ~0.97 at t = distance.
+        self.fog_k = if voxels > 0.0 { 1.9 / voxels } else { 0.0 };
+    }
+
+    /// Moves the rendered window of chunks so its minimum corner is `origin`.
+    pub fn set_volume_origin(&mut self, origin: ChunkPos) {
+        self.volume.set_origin(origin);
+    }
+
+    /// Size of the rendered window, in chunks.
+    pub fn volume_dims(&self) -> glam::UVec3 {
+        self.volume.dims()
+    }
+
     /// Uploads the dirty bricks of a chunk. Cheap if nothing changed.
     pub fn upload_chunk(&mut self, pos: ChunkPos, chunk: &mut Chunk) -> UploadStats {
         self.volume.upload_chunk(&self.ctx.queue, pos, chunk)
     }
 
-    /// Renders and presents one frame from `camera`'s point of view.
-    pub fn render(&mut self, camera: &Camera) -> FrameStats {
+    /// Frees the GPU copy of a chunk.
+    pub fn remove_chunk(&mut self, pos: ChunkPos) -> UploadStats {
+        self.volume.remove_chunk(pos)
+    }
+
+    /// Renders and presents one frame from `camera`'s point of view. `overlay` records
+    /// extra drawing onto the swapchain view after the voxel image and returns command
+    /// buffers that must run before the frame's main encoder.
+    pub fn render(
+        &mut self,
+        camera: &Camera,
+        brush: Option<BrushPreview>,
+        overlay: impl FnOnce(&OverlayTarget<'_>, &mut wgpu::CommandEncoder) -> Vec<wgpu::CommandBuffer>,
+    ) -> FrameStats {
+        let _span = tracing::trace_span!("render").entered();
         self.volume.flush(&self.ctx.queue);
 
         let Some(frame) = self.ctx.acquire_frame() else {
@@ -79,7 +127,7 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let uniform = self.frame_uniform(camera);
+        let uniform = self.frame_uniform(camera, brush);
         let mut encoder = self
             .ctx
             .device
@@ -89,17 +137,32 @@ impl Renderer {
         self.raymarch
             .dispatch(&self.ctx.queue, &mut encoder, &uniform);
         self.blit.draw(&mut encoder, &target);
-        self.ctx.queue.submit([encoder.finish()]);
+        let mut before = overlay(
+            &OverlayTarget {
+                device: &self.ctx.device,
+                queue: &self.ctx.queue,
+                view: &target,
+                size: self.ctx.size(),
+            },
+            &mut encoder,
+        );
+        before.push(encoder.finish());
+        self.ctx.queue.submit(before);
         self.ctx.queue.present(frame);
         FrameStats { presented: true }
     }
 
-    fn frame_uniform(&self, camera: &Camera) -> FrameUniform {
+    fn frame_uniform(&self, camera: &Camera, brush: Option<BrushPreview>) -> FrameUniform {
         let size = self.ctx.size();
         // Subtract in f64 so the shader works with small, precise coordinates.
-        let rel = (camera.position - self.volume.origin().origin().0.as_dvec3()).as_vec3();
+        let origin = self.volume.origin().origin().0.as_dvec3();
+        let rel = (camera.position - origin).as_vec3();
         let dims = self.volume.dims();
         let v4 = |v: Vec3| [v.x, v.y, v.z, 0.0];
+        let brush = brush.map_or([0.0; 4], |b| {
+            let c = (b.center - origin).as_vec3();
+            [c.x, c.y, c.z, b.radius]
+        });
         FrameUniform {
             camera_pos: v4(rel),
             forward: v4(camera.forward()),
@@ -112,6 +175,8 @@ impl Renderer {
                 size.height as f32,
             ],
             sun_dir: v4(self.sun_dir),
+            brush,
+            fog: [self.fog_k, 0.0, 0.0, 0.0],
             volume_dims: [dims.x, dims.y, dims.z, 0],
         }
     }

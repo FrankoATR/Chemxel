@@ -21,6 +21,10 @@ pub(crate) struct FrameUniform {
     /// x: tan(fov_y/2), y: aspect, z: width, w: height.
     pub projection: [f32; 4],
     pub sun_dir: [f32; 4],
+    /// xyz: brush centre relative to the volume origin, w: radius (<= 0: no brush).
+    pub brush: [f32; 4],
+    /// x: fog coefficient k in `1 - exp(-(t*k)^2)`.
+    pub fog: [f32; 4],
     pub volume_dims: [u32; 4],
 }
 

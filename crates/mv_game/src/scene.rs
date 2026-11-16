@@ -28,8 +28,8 @@ impl Scene {
     /// GPU volume that covers this scene.
     pub fn volume_desc(&self, brick_capacity: u32) -> VolumeDesc {
         VolumeDesc {
-            origin: ChunkPos::new(0, 0, 0),
             dims: glam::UVec3::ONE,
+            chunk_capacity: 1,
             brick_capacity,
         }
     }

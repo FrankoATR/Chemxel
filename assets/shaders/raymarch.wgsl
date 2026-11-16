@@ -1,14 +1,17 @@
 // Voxel raymarcher: one thread per pixel, hierarchical DDA (Amanatides & Woo).
 //
 // Data layout (mirrors mv_render::gpu_volume):
-//   chunk_grid[c]                     chunk slot for grid cell c, or EMPTY
-//   chunk_bricks[slot * 512 + b]      brick slot for brick b of a chunk, or EMPTY
+//   chunk_grid[c]                     entry for chunk cell c of the window
+//   chunk_bricks[slot * 512 + b]      entry for brick b of the chunk at `slot`
 //   brick_pool[brick * 256 + i / 2]   two u16 material ids per u32 (low half = even i)
 //   materials[id]                     linear colour + emissive
+// Grid and table entries: EMPTY (air), UNIFORM_BIT | material (whole chunk/brick is
+// one material), or a slot index into the next level.
 // Index orders are always x-fastest: x + y*N + z*N*N.
 // Coordinates are in voxels, relative to the volume's minimum corner.
 
 const EMPTY: u32 = 0xffffffffu;
+const UNIFORM_BIT: u32 = 0x80000000u;
 const BRICK: i32 = 8;
 const BRICKS_PER_CHUNK_AXIS: i32 = 8;
 const MAX_BRICK_STEPS: u32 = 1024u;
@@ -21,6 +24,8 @@ struct Frame {
     // x: tan(fov_y / 2), y: aspect ratio, z: width, w: height
     projection: vec4<f32>,
     sun_dir: vec4<f32>,     // xyz: direction towards the sun (normalised)
+    brush: vec4<f32>,       // xyz: brush centre (volume-relative), w: radius (<= 0: none)
+    fog: vec4<f32>,         // x: k in 1 - exp(-(t*k)^2)
     volume_dims: vec4<u32>, // xyz: volume size in chunks
 };
 
@@ -48,12 +53,13 @@ fn no_hit() -> Hit {
     return Hit(false, 0.0, 0u, 0, vec3<i32>(0));
 }
 
-fn brick_slot_at(g: vec3<i32>) -> u32 {
+// Entry for brick g (in bricks, volume-relative): EMPTY, uniform or a pool slot.
+fn brick_entry(g: vec3<i32>) -> u32 {
     let dims = vec3<i32>(frame.volume_dims.xyz);
     let c = g / BRICKS_PER_CHUNK_AXIS;
     let chunk = chunk_grid[c.x + c.y * dims.x + c.z * dims.x * dims.y];
-    if chunk == EMPTY {
-        return EMPTY;
+    if (chunk & UNIFORM_BIT) != 0u {
+        return chunk; // EMPTY also has the bit set
     }
     let b = g - c * BRICKS_PER_CHUNK_AXIS;
     return chunk_bricks[chunk * 512u + u32(b.x + b.y * 8 + b.z * 64)];
@@ -135,9 +141,15 @@ fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
     var t = t_enter;
 
     for (var i = 0u; i < MAX_BRICK_STEPS; i++) {
-        let brick = brick_slot_at(g);
+        let brick = brick_entry(g);
         if brick != EMPTY {
-            let hit = trace_brick(ro, rd, inv, step, t, g * BRICK, brick, axis);
+            let bmin = g * BRICK;
+            if (brick & UNIFORM_BIT) != 0u {
+                // Solid uniform brick: the entry point is the hit.
+                let v = clamp(vec3<i32>(floor(ro + rd * t)), bmin, bmin + vec3<i32>(BRICK - 1));
+                return Hit(true, t, brick & 0xffffu, axis, v);
+            }
+            let hit = trace_brick(ro, rd, inv, step, t, bmin, brick, axis);
             if hit.found {
                 return hit;
             }
@@ -202,9 +214,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let base = mat.color.rgb * variation;
         color = base * (0.35 * face_ambient + 0.75 * diffuse) + base * mat.params.x * 0.6;
 
-        // Distance fog.
-        let fog = 1.0 - exp(-hit.t * 0.0015);
-        color = mix(color, sky(rd), fog);
+        // Brush preview: tint voxels inside the brush sphere.
+        if frame.brush.w > 0.0 {
+            let d = vec3<f32>(hit.voxel) + 0.5 - frame.brush.xyz;
+            if dot(d, d) <= frame.brush.w * frame.brush.w {
+                color = mix(color, vec3<f32>(1.0, 0.85, 0.3), 0.35);
+            }
+        }
+
+        // Distance fog, fully opaque near the edge of the render distance.
+        let ft = hit.t * frame.fog.x;
+        color = mix(color, sky(rd), 1.0 - exp(-ft * ft));
     }
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(color, 1.0));
 }

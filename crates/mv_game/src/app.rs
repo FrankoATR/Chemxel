@@ -110,7 +110,7 @@ impl App {
         self.scene.upload_dirty(&mut renderer);
         tracing::info!(
             "uploaded test scene: {} bricks in use",
-            renderer.volume().bricks_in_use()
+            renderer.volume_stats().bricks_in_use
         );
         Ok(Running { window, renderer })
     }
@@ -162,7 +162,9 @@ impl App {
             return;
         };
         self.scene.upload_dirty(&mut running.renderer);
-        running.renderer.render(&self.camera);
+        running
+            .renderer
+            .render(&self.camera, None, |_, _| Vec::new());
 
         if let Some(fps) = fps {
             let p = self.camera.position;

@@ -14,8 +14,11 @@ mod slots;
 
 pub use camera::Camera;
 pub use context::{GpuContext, SurfaceSize};
-pub use gpu_volume::{EMPTY, GpuVolume, MAX_MATERIALS, MaterialGpu, UploadStats, VolumeDesc};
-pub use renderer::{FrameStats, Renderer};
+pub use gpu_volume::{
+    BRICK_BYTES, EMPTY, GpuVolume, MAX_MATERIALS, MaterialGpu, UNIFORM_BIT, UploadStats,
+    VolumeDesc, VolumeStats,
+};
+pub use renderer::{BrushPreview, FrameStats, OverlayTarget, Renderer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
