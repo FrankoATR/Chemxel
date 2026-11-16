@@ -199,7 +199,18 @@ impl App {
         if let Some(bench) = self.bench.as_mut() {
             let ready = self.world.is_idle();
             if bench.step(&mut self.camera, dt, ready, &self.stats.sync) {
-                tracing::info!("{}", bench.report());
+                let w = self.world.world.stats();
+                let g = &self.stats.gpu;
+                tracing::info!(
+                    "{}; world: {} chunks ({} uniform), {} dense bricks, {:.0} MiB CPU; GPU: {:.0} MiB bricks, {} chunk slots",
+                    bench.report(),
+                    w.chunks,
+                    w.uniform_chunks,
+                    w.dense_bricks,
+                    w.heap_bytes as f64 / (1024.0 * 1024.0),
+                    g.brick_bytes() as f64 / (1024.0 * 1024.0),
+                    g.chunk_slots_in_use
+                );
                 self.bench = None;
                 self.exit_requested = true;
             }

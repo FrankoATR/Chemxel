@@ -1,7 +1,7 @@
 //! `--bench-fly`: reproducible streaming benchmark in the real game.
 //!
 //! Waits until the region around the spawn point is fully loaded, then flies the
-//! camera in a straight line at constant speed and altitude while recording every
+//! camera in a straight line at constant speed and altitude (10 m above the spawn) while recording every
 //! frame time. At the end it logs percentiles and stutter counts and asks the app
 //! to exit. Use with `vsync: false` to measure the real frame cost.
 
@@ -51,9 +51,10 @@ impl BenchFly {
             if world_ready {
                 tracing::info!("bench-fly: world loaded, flying for {:?}", self.duration);
                 self.flying = Some(Duration::ZERO);
-                self.start = camera.position;
+                // 10 m above the spawn point, looking ahead and slightly down.
+                self.start = camera.position + DVec3::Y * 160.0;
                 camera.yaw = -std::f32::consts::FRAC_PI_2; // look along +X
-                camera.pitch = -0.15;
+                camera.pitch = -0.25;
             }
             return false;
         };
