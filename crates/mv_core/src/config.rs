@@ -104,7 +104,7 @@ impl Default for RenderConfig {
         Self {
             vsync: true,
             render_distance_chunks: 16,
-            render_height_chunks: 4,
+            render_height_chunks: 8,
             brick_pool_capacity: 262_144,
             chunk_slot_capacity: 8192,
             upload_budget_kib: 8192,

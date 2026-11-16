@@ -133,7 +133,10 @@ impl TerrainGenerator {
         let detail = self.detail.get(p) * t.detail_amplitude;
         // Mountains only where the low-frequency mask is high.
         let mask = smoothstep(0.05, 0.45, self.mountain_mask.get(p));
-        let ridges = (self.mountains.get(p) * 0.5 + 0.5).clamp(0.0, 1.0);
+        // Ridged noise can exceed 1; saturate smoothly instead of clamping, which
+        // would cut flat plateaus into the peaks.
+        let r = (self.mountains.get(p) * 0.5 + 0.5).max(0.0);
+        let ridges = 1.0 - (-1.6 * r).exp();
         let mountains = mask * ridges * ridges * t.mountain_amplitude;
         (t.base_height + hills + detail + mountains).floor() as i32
     }

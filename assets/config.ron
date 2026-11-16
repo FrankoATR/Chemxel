@@ -15,7 +15,7 @@
     render: (
         vsync: true,
         render_distance_chunks: 16,  // horizontal radius (1 chunk = 4 m)
-        render_height_chunks: 4,     // vertical radius around the camera
+        render_height_chunks: 8,     // vertical radius around the camera (covers mountains)
         // 8³ bricks, 1 KiB each: 262144 = 256 MiB of GPU memory.
         brick_pool_capacity: 262144,
         chunk_slot_capacity: 8192,   // 2 KiB each

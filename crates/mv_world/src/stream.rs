@@ -40,7 +40,7 @@ impl StreamSettings {
 /// Counters for the debug overlay.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StreamStats {
-    /// Chunks of the load region not loaded yet (not counting in-flight jobs).
+    /// Chunks of the load region neither loaded nor being generated.
     pub missing: usize,
     pub inflight: usize,
     pub stashed: usize,
@@ -56,6 +56,8 @@ pub struct Streamer {
     wanted: Vec<ChunkPos>,
     /// Entries of `wanted` before this index are loaded or in flight.
     cursor: usize,
+    /// Loaded chunks inside the load region (for statistics).
+    loaded_in_region: usize,
     inflight: HashSet<ChunkPos>,
     tx: Sender<(ChunkPos, Chunk)>,
     rx: Receiver<(ChunkPos, Chunk)>,
@@ -71,6 +73,7 @@ impl Streamer {
             center: None,
             wanted: Vec::new(),
             cursor: 0,
+            loaded_in_region: 0,
             inflight: HashSet::new(),
             tx,
             rx,
@@ -88,7 +91,10 @@ impl Streamer {
 
     pub fn stats(&self) -> StreamStats {
         StreamStats {
-            missing: self.wanted.len() - self.cursor.min(self.wanted.len()),
+            missing: self
+                .wanted
+                .len()
+                .saturating_sub(self.loaded_in_region + self.inflight.len()),
             inflight: self.inflight.len(),
             stashed: self.stash.len(),
             cached_columns: self.generator.cached_columns(),
@@ -108,14 +114,14 @@ impl Streamer {
             self.recenter(center, world);
         }
 
-        for (pos, chunk) in self.rx.try_iter() {
+        while let Ok((pos, chunk)) = self.rx.try_recv() {
             self.inflight.remove(&pos);
             if self
                 .settings
                 .within(center, pos, self.settings.unload_margin)
                 && !world.contains(pos)
             {
-                world.insert(pos, chunk);
+                self.insert(center, pos, chunk, world);
             }
         }
 
@@ -127,7 +133,7 @@ impl Streamer {
             }
             if let Some(mut chunk) = self.stash.remove(&pos) {
                 chunk.mark_all_dirty();
-                world.insert(pos, chunk);
+                self.insert(center, pos, chunk, world);
                 continue;
             }
             self.inflight.insert(pos);
@@ -138,6 +144,13 @@ impl Streamer {
                 let _ = tx.send((pos, generator.generate(pos)));
             });
         }
+    }
+
+    fn insert(&mut self, center: ChunkPos, pos: ChunkPos, chunk: Chunk, world: &mut World) {
+        if self.settings.within(center, pos, 0) {
+            self.loaded_in_region += 1;
+        }
+        world.insert(pos, chunk);
     }
 
     fn recenter(&mut self, center: ChunkPos, world: &mut World) {
@@ -156,6 +169,10 @@ impl Streamer {
                 self.stash.insert(pos, chunk);
             }
         }
+        self.loaded_in_region = world
+            .positions()
+            .filter(|&p| s.within(center, p, 0))
+            .count();
         self.generator.retain_columns(
             glam::IVec2::new(center.0.x, center.0.z),
             (s.radius + s.unload_margin + 1) as i32,
@@ -227,6 +244,7 @@ mod tests {
         run_until_idle(&mut s, origin, &mut world);
         // Radius 2 disc has 13 columns; 3 layers.
         assert_eq!(world.len(), 13 * 3);
+        assert_eq!(s.stats().missing, 0);
         assert!(world.contains(ChunkPos::new(2, 1, 0)));
         assert!(!world.contains(ChunkPos::new(2, 0, 2)));
 
