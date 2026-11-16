@@ -27,15 +27,22 @@ pub(crate) struct Material {
     /// absorbs the difference between the two materials' values.
     #[serde(default)]
     pub latent_heat: f32,
+    /// Heat lost to the environment per voxel, tick and kelvin above ambient
+    /// (convection/radiation that the grid does not model; mostly air).
+    #[serde(default)]
+    pub heat_loss: f32,
     /// Emitted light intensity (0 = none).
     #[serde(default)]
     pub emissive: f32,
     /// Max horizontal cells a liquid/gas spreads per tick.
     #[serde(default)]
     pub dispersion: u8,
-    /// Random lifetime range in ticks; the voxel disappears when it expires.
+    /// Random lifetime range in ticks; the voxel decays when it expires.
     #[serde(default)]
     pub lifetime: Option<(u32, u32)>,
+    /// What the voxel becomes when its lifetime expires (default: air).
+    #[serde(default)]
+    pub decays_into: Option<String>,
     /// Temperature the material is created at and tends to (°C).
     #[serde(default)]
     pub base_temperature: Option<f32>,
@@ -62,6 +69,13 @@ pub(crate) struct Material {
     /// Probability per tick that a burning voxel is consumed.
     #[serde(default)]
     pub burn_rate: f32,
+    /// Material a burning voxel emits into an adjacent air voxel (e.g. "fire"). Its
+    /// `base_temperature` also caps the temperature combustion can reach.
+    #[serde(default)]
+    pub flame: Option<String>,
+    /// Probability per tick that a burning voxel emits a flame.
+    #[serde(default)]
+    pub flame_rate: f32,
 }
 
 fn default_heat_capacity() -> f32 {

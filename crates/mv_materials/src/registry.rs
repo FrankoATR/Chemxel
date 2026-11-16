@@ -61,9 +61,13 @@ pub struct Material {
     pub heat_capacity: f32,
     /// Latent energy per voxel relative to the lowest phase (see the README).
     pub latent_heat: f32,
+    /// Heat lost to the environment per voxel, tick and kelvin above ambient.
+    pub heat_loss: f32,
     pub emissive: f32,
     pub dispersion: u8,
     pub lifetime: Option<(u32, u32)>,
+    /// Product when the lifetime expires (air if not given).
+    pub decays_into: MaterialId,
     pub base_temperature: Option<f32>,
     pub melt: Option<Transition>,
     pub boil: Option<Transition>,
@@ -71,6 +75,9 @@ pub struct Material {
     pub flammable: bool,
     pub ignite: Option<Transition>,
     pub burn_rate: f32,
+    /// Emitted into adjacent air while burning.
+    pub flame: Option<MaterialId>,
+    pub flame_rate: f32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -111,7 +118,16 @@ pub enum RegistryError {
         set: &'static str,
         missing: &'static str,
     },
-    #[error("too many materials: {0} (max {max})", max = u16::MAX)]
+    #[error("{what} ({origin}): invalid `{field}`: {reason}")]
+    InvalidValue {
+        what: String,
+        origin: String,
+        field: &'static str,
+        reason: &'static str,
+    },
+    #[error("{origin}: reaction between material ids {a} and {b} is defined twice")]
+    DuplicateReaction { origin: String, a: u16, b: u16 },
+    #[error("too many entries: {0} (max {max})", max = u16::MAX)]
     TooMany(usize),
 }
 
@@ -226,6 +242,18 @@ impl MaterialRegistry {
         self.materials.is_empty()
     }
 
+    /// Checks that every material of `old` keeps its id here, so a world filled with
+    /// `old`'s ids stays valid (hot reload may only change properties or append new
+    /// materials). Returns the first offending name.
+    pub fn keeps_ids_of(&self, old: &MaterialRegistry) -> Result<(), String> {
+        for (id, m) in old.iter() {
+            if self.id(&m.name) != Some(id) {
+                return Err(m.name.clone());
+            }
+        }
+        Ok(())
+    }
+
     /// Iterates `(id, material)` in id order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (MaterialId, &Material)> {
         self.materials
@@ -273,6 +301,45 @@ fn resolve(
         }
     };
 
+    let reference = |name: &Option<String>, field: &'static str| {
+        name.as_ref()
+            .map(|target| {
+                by_name
+                    .get(target)
+                    .copied()
+                    .ok_or_else(|| RegistryError::UnknownReference {
+                        material: d.name.clone(),
+                        origin: origin.to_owned(),
+                        field,
+                        target: target.clone(),
+                    })
+            })
+            .transpose()
+    };
+    let invalid = |field, reason| RegistryError::InvalidValue {
+        what: format!("material \"{}\"", d.name),
+        origin: origin.to_owned(),
+        field,
+        reason,
+    };
+    if !(0.0..=1.0).contains(&d.burn_rate) {
+        return Err(invalid("burn_rate", "must be within 0..=1"));
+    }
+    if !(0.0..=1.0).contains(&d.heat_loss) {
+        return Err(invalid("heat_loss", "must be within 0..=1"));
+    }
+    if !(0.0..=1.0).contains(&d.flame_rate) {
+        return Err(invalid("flame_rate", "must be within 0..=1"));
+    }
+    if let Some((lo, hi)) = d.lifetime
+        && (lo == 0 || lo > hi)
+    {
+        return Err(invalid("lifetime", "needs 0 < min <= max"));
+    }
+    if d.decays_into.is_some() && d.lifetime.is_none() {
+        return Err(invalid("decays_into", "needs a lifetime"));
+    }
+
     let (r, g, b, a) = d.color;
     Ok(Material {
         name: d.name.clone(),
@@ -282,9 +349,11 @@ fn resolve(
         conductivity: d.conductivity,
         heat_capacity: d.heat_capacity,
         latent_heat: d.latent_heat,
+        heat_loss: d.heat_loss,
         emissive: d.emissive,
         dispersion: d.dispersion,
         lifetime: d.lifetime,
+        decays_into: reference(&d.decays_into, "decays_into")?.unwrap_or(MaterialId::AIR),
         base_temperature: d.base_temperature,
         melt: transition(d.melt_at, &d.melts_into, "melt_at", "melts_into")?,
         boil: transition(d.boil_at, &d.boils_into, "boil_at", "boils_into")?,
@@ -292,6 +361,8 @@ fn resolve(
         flammable: d.flammable,
         ignite: transition(d.ignite_at, &d.burns_into, "ignite_at", "burns_into")?,
         burn_rate: d.burn_rate,
+        flame: reference(&d.flame, "flame")?,
+        flame_rate: d.flame_rate,
     })
 }
 
@@ -398,6 +469,63 @@ mod tests {
             r#"[Material(name: "air", state: Gas, density: 1.2, color: (0,0,0,0), colour: 1)]"#,
         );
         assert!(matches!(err, Err(RegistryError::Parse { .. })));
+    }
+
+    #[test]
+    fn decay_and_flame_references_resolve() {
+        let reg = load(
+            r#"[
+                Material(name: "air", state: Gas, density: 1.2, color: (0,0,0,0)),
+                Material(name: "fire", state: Energy, density: 0.3, color: (9,9,9,9),
+                         lifetime: (5, 10), decays_into: "smoke"),
+                Material(name: "smoke", state: Gas, density: 0.9, color: (9,9,9,9),
+                         lifetime: (5, 10)),
+                Material(name: "wood", state: Solid, density: 700, color: (9,9,9,9),
+                         flammable: true, ignite_at: 300, burns_into: "air",
+                         flame: "fire", flame_rate: 0.1),
+            ]"#,
+        )
+        .unwrap();
+        let id = |n| reg.id(n).unwrap();
+        assert_eq!(reg.get(id("fire")).decays_into, id("smoke"));
+        assert_eq!(reg.get(id("smoke")).decays_into, MaterialId::AIR);
+        assert_eq!(reg.get(id("wood")).flame, Some(id("fire")));
+    }
+
+    #[test]
+    fn invalid_rates_and_lifetimes_are_errors() {
+        for bad in [
+            r#"Material(name: "x", state: Solid, density: 1, color: (0,0,0,0), burn_rate: 2)"#,
+            r#"Material(name: "x", state: Gas, density: 1, color: (0,0,0,0), lifetime: (5, 2))"#,
+            r#"Material(name: "x", state: Gas, density: 1, color: (0,0,0,0), decays_into: "air")"#,
+        ] {
+            let text = format!(
+                r#"[Material(name: "air", state: Gas, density: 1.2, color: (0,0,0,0)), {bad}]"#
+            );
+            assert!(
+                matches!(load(&text), Err(RegistryError::InvalidValue { .. })),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn id_compatibility_for_hot_reload() {
+        let base = r#"Material(name: "air", state: Gas, density: 1.2, color: (0,0,0,0)),
+                      Material(name: "a", state: Solid, density: 1, color: (0,0,0,0)),"#;
+        let old = load(&format!("[{base}]")).unwrap();
+        let appended = load(&format!(
+            r#"[{base} Material(name: "b", state: Solid, density: 1, color: (0,0,0,0))]"#
+        ))
+        .unwrap();
+        assert!(appended.keeps_ids_of(&old).is_ok());
+        let reordered = load(
+            r#"[Material(name: "air", state: Gas, density: 1.2, color: (0,0,0,0)),
+                Material(name: "b", state: Solid, density: 1, color: (0,0,0,0)),
+                Material(name: "a", state: Solid, density: 1, color: (0,0,0,0))]"#,
+        )
+        .unwrap();
+        assert_eq!(reordered.keeps_ids_of(&old), Err("a".to_owned()));
     }
 
     #[test]

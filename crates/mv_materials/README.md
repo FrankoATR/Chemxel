@@ -1,8 +1,12 @@
 # mv_materials
 
-Registro de materiales de Chemxel. Carga todos los `assets/materials/*.ron` (en orden
-alfabético de archivo, para que los ids sean deterministas) y los guarda en una tabla
-contigua indexada por `MaterialId` (`u16`).
+Registro de materiales y reacciones de Chemxel.
+
+- `MaterialRegistry::load_dir` carga todos los `assets/materials/*.ron` (en orden
+  alfabético de archivo, para que los ids sean deterministas) y los guarda en una tabla
+  contigua indexada por `MaterialId` (`u16`).
+- `ReactionSet::load_dir` carga después los `assets/reactions/*.ron` y construye una
+  matriz `a × b` para buscar reacciones en O(1).
 
 ## Reglas
 
@@ -13,6 +17,12 @@ contigua indexada por `MaterialId` (`u16`).
   `burns_into`) deben existir; si no, la carga falla indicando material, archivo y campo.
 - Cada transición se escribe en pareja: `melt_at` + `melts_into`, `boil_at` + `boils_into`,
   `freeze_at` + `freezes_into`, `ignite_at` + `burns_into`.
+- Las probabilidades (`burn_rate`, `flame_rate`, `probability`) y `heat_loss` van de 0 a 1;
+  `lifetime` necesita `0 < min <= max`, y `decays_into` necesita un `lifetime`.
+- **Hot reload** (builds de debug): el juego vuelve a cargar los RON cuando cambian. Un
+  material existente no puede cambiar de id (no se pueden quitar ni reordenar materiales,
+  solo añadir al final o cambiar propiedades); si no, la recarga se rechaza con un error
+  en el log y se sigue con la versión anterior.
 - Los campos desconocidos son un error (detecta erratas).
 - Extensión RON `implicit_some` activa: `melt_at: 1200` equivale a `melt_at: Some(1200)`.
 
@@ -26,10 +36,12 @@ contigua indexada por `MaterialId` (`u16`).
 | `color` | `(r, g, b, a)` 0–255 | — (obligatorio) | Color sRGB; `a` < 255 = translúcido |
 | `conductivity` | número | `0` | Conductividad térmica, W/(m·K) |
 | `heat_capacity` | número | `1.0` | Capacidad calorífica, kJ/(kg·K) |
-| `latent_heat` | número | `0` | Energía latente por vóxel respecto a la fase más baja (ver abajo) |
+| `latent_heat` | número | `0` | Energía latente por vóxel respecto a la fase más baja; en combustibles, la que libera al arder (ver abajo) |
+| `heat_loss` | 0–1 | `0` | Calor perdido al entorno por vóxel, tick y grado sobre el ambiente (convección que la grilla no modela; sobre todo el aire) |
 | `emissive` | número | `0` | Intensidad de luz emitida |
 | `dispersion` | entero 0–255 | `0` | Celdas que un líquido/gas se expande en horizontal por tick |
-| `lifetime` | `(min, max)` ticks | ninguno | Vida aleatoria; al expirar el vóxel desaparece |
+| `lifetime` | `(min, max)` ticks | ninguno | Vida aleatoria; al expirar el vóxel se transforma en `decays_into` |
+| `decays_into` | nombre | `air` | Producto cuando expira el `lifetime` |
 | `base_temperature` | °C | ninguno | Temperatura con la que se crea y a la que tiende |
 | `melt_at` / `melts_into` | °C / nombre | ninguno | Fusión (al superar la temperatura) |
 | `boil_at` / `boils_into` | °C / nombre | ninguno | Ebullición (al superar la temperatura) |
@@ -37,6 +49,16 @@ contigua indexada por `MaterialId` (`u16`).
 | `flammable` | bool | `false` | Puede arder |
 | `ignite_at` / `burns_into` | °C / nombre | ninguno | Ignición y producto de la combustión |
 | `burn_rate` | 0–1 | `0` | Probabilidad por tick de consumirse mientras arde |
+| `flame` | nombre | ninguno | Material que emite al aire vecino mientras arde (p. ej. `fire`); su `base_temperature` limita la temperatura de la combustión |
+| `flame_rate` | 0–1 | `0` | Probabilidad por tick de emitir una llama mientras arde |
+
+Un vóxel inflamable **arde** mientras su celda de temperatura supera `ignite_at`. Cada
+tick, con probabilidad `burn_rate`, se convierte en `burns_into` y libera
+`latent_heat(material) − latent_heat(producto)`, hasta la temperatura de su llama. Si no
+se consume, con probabilidad `flame_rate` emite una llama en un vóxel de aire vecino.
+
+`lifetime` se implementa sin guardar la edad de cada vóxel: cada tick el vóxel expira con
+probabilidad `2 / (min + max)`, es decir, con vida media `(min + max) / 2` ticks (ADR 008).
 
 ## Unidades térmicas
 
@@ -57,4 +79,28 @@ que con los valores reales el vapor al condensarse calentaría el aire miles de 
 ]
 ```
 
-Las reacciones químicas (`assets/reactions/*.ron`) se añaden en el hito 5.
+## Esquema de `Reaction`
+
+`a + b → result_a + result_b`. La simulación evalúa la reacción al recorrer un vóxel de
+`a` que tiene a `b` como vecino de cara. Por eso `a` debería ser un material que se mueve
+(líquido, gas, polvo o fuego): un sólido estático en un brick uniforme no se recorre. Cada
+par `(a, b)` solo puede definirse una vez; `(b, a)` es otra reacción.
+
+| Campo | Tipo | Por defecto | Significado |
+|---|---|---|---|
+| `a`, `b` | nombre | — (obligatorio) | Reactivos |
+| `result_a`, `result_b` | nombre | el mismo reactivo | Productos |
+| `probability` | 0–1 | — (obligatorio) | Probabilidad por tick y contacto |
+| `heat` | número | `0` | Energía extra liberada (> 0) o absorbida (< 0), en las unidades de `latent_heat` |
+| `min_temp`, `max_temp` | °C | sin límite | Rango de temperatura requerido en la celda de `a` |
+
+Los productos absorben o liberan además la diferencia de `latent_heat`, como en un cambio
+de fase: la lava que se convierte en obsidiana libera su calor latente.
+
+```ron
+[
+  Reaction(a: "water", b: "lava", result_a: "steam", result_b: "obsidian", probability: 0.3),
+  Reaction(a: "fire",  b: "wood", probability: 0.3, heat: 300000),
+  Reaction(a: "acid",  b: "stone", result_a: "air", result_b: "air", probability: 0.02),
+]
+```

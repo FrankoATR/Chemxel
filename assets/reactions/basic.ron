@@ -1,0 +1,30 @@
+// Chemical reactions. Schema: crates/mv_materials/README.md
+// `a + b -> result_a + result_b`, evaluated when the simulation scans a voxel of `a`
+// and finds a face neighbour of `b` (so `a` should be a material that moves: liquid,
+// gas, powder or fire). `probability` is per tick and contact. Products also absorb or
+// release the difference of `latent_heat`; `heat` is extra energy (> 0 releases).
+[
+    // Quenching: lava touching water turns into obsidian and boils the water. Lava's
+    // latent heat goes into the cell, so more water around it boils.
+    Reaction(a: "water", b: "lava",   result_a: "steam", result_b: "obsidian", probability: 0.3),
+
+    // Flames heat what they touch; the heated fuel ignites by temperature.
+    Reaction(a: "fire",  b: "wood",   probability: 0.3, heat: 300000),
+    Reaction(a: "fire",  b: "leaves", probability: 0.4, heat: 300000),
+    Reaction(a: "fire",  b: "grass",  probability: 0.1, heat: 100000),
+    // Water and ice put flames out.
+    Reaction(a: "fire",  b: "water",  result_a: "smoke", probability: 0.5),
+    Reaction(a: "fire",  b: "ice",    result_a: "smoke", probability: 0.5),
+
+    // Acid dissolves most things (and is used up); glass and obsidian resist it.
+    Reaction(a: "acid",  b: "stone",  result_a: "air", result_b: "air", probability: 0.02),
+    Reaction(a: "acid",  b: "dirt",   result_a: "air", result_b: "air", probability: 0.04),
+    Reaction(a: "acid",  b: "grass",  result_a: "air", result_b: "air", probability: 0.05),
+    Reaction(a: "acid",  b: "sand",   result_a: "air", result_b: "air", probability: 0.03),
+    Reaction(a: "acid",  b: "wood",   result_a: "air", result_b: "air", probability: 0.05),
+    Reaction(a: "acid",  b: "leaves", result_a: "air", result_b: "air", probability: 0.1),
+    Reaction(a: "acid",  b: "ash",    result_a: "air", result_b: "air", probability: 0.1),
+    Reaction(a: "acid",  b: "ice",    result_b: "water", probability: 0.05),
+    // Water slowly dilutes acid.
+    Reaction(a: "acid",  b: "water",  result_a: "water", probability: 0.002),
+]

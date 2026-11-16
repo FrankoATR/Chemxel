@@ -1,10 +1,11 @@
 // Base materials. Schema: crates/mv_materials/README.md
 // Temperatures in °C, density in kg/m³, colours as sRGB (r, g, b, alpha).
-// latent_heat: energy per voxel relative to the lowest phase, in density × heat_capacity
-// units (game-tuned, see crates/mv_materials/README.md).
+// latent_heat: energy per voxel relative to the lowest phase (or, for fuels, released
+// by burning), in density × heat_capacity units (game-tuned, see the README).
 // "air" is required and always gets MaterialId 0.
 [
-    Material(name: "air",      state: Gas,    density: 1.2,  color: (0, 0, 0, 0),         conductivity: 0.02),
+    Material(name: "air",      state: Gas,    density: 1.2,  color: (0, 0, 0, 0),         conductivity: 0.02,
+             heat_loss: 0.01),
 
     // --- Terrain ---
     Material(name: "stone",    state: Solid,  density: 2600, color: (120, 120, 125, 255), conductivity: 2.5,
@@ -12,6 +13,7 @@
     Material(name: "dirt",     state: Solid,  density: 1500, color: (115, 80, 50, 255),   conductivity: 0.5,
              heat_capacity: 0.8),
     Material(name: "grass",    state: Solid,  density: 1300, color: (80, 150, 60, 255),   conductivity: 0.4,
+             latent_heat: 100000,
              flammable: true, ignite_at: 250, burns_into: "dirt", burn_rate: 0.05),
     Material(name: "sand",     state: Powder, density: 1600, color: (220, 200, 140, 255), conductivity: 0.3,
              heat_capacity: 0.8, melt_at: 1700, melts_into: "glass"),
@@ -23,7 +25,7 @@
     Material(name: "ice",      state: Solid,  density: 917,  color: (190, 220, 255, 220), conductivity: 2.2,
              heat_capacity: 2.1, base_temperature: -10, melt_at: 0, melts_into: "water"),
     Material(name: "steam",    state: Gas,    density: 0.6,  color: (220, 220, 230, 90),  conductivity: 0.02,
-             heat_capacity: 2.0, latent_heat: 360000, lifetime: Some((200, 600)),
+             heat_capacity: 2.0, latent_heat: 360000, lifetime: (200, 600), decays_into: "water",
              freeze_at: 99, freezes_into: "water"),
 
     // --- Heat ---
@@ -37,14 +39,23 @@
              melt_at: 1500, melts_into: "lava"),
 
     // --- Combustion ---
+    // A flammable voxel burns while its cell is above `ignite_at`: each tick it may be
+    // consumed (`burn_rate`, releasing `latent_heat`) or emit a `flame` into the air.
     Material(name: "wood",     state: Solid,  density: 700,  color: (130, 85, 45, 255),   conductivity: 0.15,
-             heat_capacity: 1.7, flammable: true, ignite_at: 300, burns_into: "ash", burn_rate: 0.02),
-    Material(name: "fire",     state: Energy, density: 0.3,  color: (255, 160, 40, 230),  emissive: 6.0,
-             base_temperature: 800, lifetime: Some((20, 60))),
-    Material(name: "smoke",    state: Gas,    density: 0.9,  color: (60, 60, 60, 120),    lifetime: Some((100, 300))),
+             heat_capacity: 1.7, latent_heat: 1000000,
+             flammable: true, ignite_at: 280, burns_into: "ash", burn_rate: 0.02,
+             flame: "fire", flame_rate: 0.08),
+    Material(name: "leaves",   state: Solid,  density: 400,  color: (60, 125, 45, 255),   conductivity: 0.1,
+             heat_capacity: 1.5, latent_heat: 400000,
+             flammable: true, ignite_at: 220, burns_into: "air", burn_rate: 0.06,
+             flame: "fire", flame_rate: 0.15),
+    Material(name: "fire",     state: Energy, density: 0.3,  color: (255, 160, 40, 230),  conductivity: 0.05,
+             emissive: 6.0, base_temperature: 800, lifetime: (10, 30), decays_into: "smoke"),
+    Material(name: "smoke",    state: Gas,    density: 0.9,  color: (60, 60, 60, 120),    conductivity: 0.02,
+             heat_loss: 0.01, lifetime: (60, 200)),
     Material(name: "ash",      state: Powder, density: 600,  color: (90, 88, 85, 255),    conductivity: 0.1),
 
     // --- Chemistry ---
     Material(name: "acid",     state: Liquid, density: 1200, color: (140, 230, 40, 200),  conductivity: 0.5,
-             dispersion: 4),
+             heat_capacity: 3.5, dispersion: 4),
 ]
