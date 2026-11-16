@@ -73,6 +73,53 @@ pub fn fill_sphere(
     changed_total
 }
 
+/// Writes `material` into every voxel of the inclusive box `[min, max]` for which
+/// `replace(current)` is true. Unloaded chunks are skipped. Returns the number of
+/// voxels that changed.
+pub fn fill_box(
+    world: &mut World,
+    min: WorldPos,
+    max: WorldPos,
+    material: MaterialId,
+    mut replace: impl FnMut(MaterialId) -> bool,
+) -> usize {
+    let _span = tracing::trace_span!("fill_box").entered();
+    let (lo, hi) = (min.0.min(max.0), min.0.max(max.0));
+    let (clo, chi) = (WorldPos(lo).chunk().0, WorldPos(hi).chunk().0);
+    let size = CHUNK_SIZE as i64;
+    let mut changed_total = 0;
+    for cz in clo.z..=chi.z {
+        for cy in clo.y..=chi.y {
+            for cx in clo.x..=chi.x {
+                let cpos = ChunkPos::new(cx, cy, cz);
+                let Some(chunk) = world.chunk_mut(cpos) else {
+                    continue;
+                };
+                let origin = cpos.origin().0;
+                let a = (lo - origin).max(I64Vec3::ZERO);
+                let b = (hi - origin).min(I64Vec3::splat(size - 1));
+                let mut changed = 0;
+                for z in a.z..=b.z {
+                    for y in a.y..=b.y {
+                        for x in a.x..=b.x {
+                            let local = LocalPos::new(x as u8, y as u8, z as u8);
+                            if replace(chunk.get(local)) && chunk.set(local, material) {
+                                changed += 1;
+                            }
+                        }
+                    }
+                }
+                if changed > 0 {
+                    chunk.compact();
+                    world.mark_edited(cpos);
+                    changed_total += changed;
+                }
+            }
+        }
+    }
+    changed_total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +186,22 @@ mod tests {
             w.chunk(ChunkPos::new(0, 0, 0)).unwrap().as_uniform(),
             Some(MaterialId::AIR)
         );
+    }
+
+    #[test]
+    fn box_across_chunks() {
+        let mut w = world_3x3x3(MaterialId::AIR);
+        let n = fill_box(
+            &mut w,
+            WorldPos::new(-2, -2, -2),
+            WorldPos::new(1, 1, 1),
+            SAND,
+            |_| true,
+        );
+        assert_eq!(n, 64);
+        assert_eq!(w.take_edited().len(), 8);
+        assert_eq!(w.voxel(WorldPos::new(1, 1, 1)), Some(SAND));
+        assert_eq!(w.voxel(WorldPos::new(2, 1, 1)), Some(MaterialId::AIR));
     }
 
     #[test]

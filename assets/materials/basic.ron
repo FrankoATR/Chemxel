@@ -7,7 +7,7 @@
     // --- Terrain ---
     Material(name: "stone",    state: Solid,  density: 2600, color: (120, 120, 125, 255), conductivity: 2.5,
              heat_capacity: 0.8, melt_at: 1200, melts_into: "lava"),
-    Material(name: "dirt",     state: Powder, density: 1500, color: (115, 80, 50, 255),   conductivity: 0.5,
+    Material(name: "dirt",     state: Solid,  density: 1500, color: (115, 80, 50, 255),   conductivity: 0.5,
              heat_capacity: 0.8),
     Material(name: "grass",    state: Solid,  density: 1300, color: (80, 150, 60, 255),   conductivity: 0.4,
              flammable: true, ignite_at: 250, burns_into: "dirt", burn_rate: 0.05),

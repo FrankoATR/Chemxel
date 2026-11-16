@@ -78,6 +78,18 @@ impl World {
         Some(chunk)
     }
 
+    /// Temporarily takes a chunk out without queueing it as unloaded, so a system can
+    /// mutate it while sharing the rest of the world read-only (e.g. the simulation's
+    /// parallel phases). Must be returned with [`World::attach`].
+    pub fn detach(&mut self, pos: ChunkPos) -> Option<Chunk> {
+        self.chunks.remove(&pos)
+    }
+
+    /// Puts back a chunk taken with [`World::detach`] (no queue side effects).
+    pub fn attach(&mut self, pos: ChunkPos, chunk: Chunk) {
+        self.chunks.insert(pos, chunk);
+    }
+
     /// Material at `pos`, or `None` if its chunk is not loaded.
     pub fn voxel(&self, pos: WorldPos) -> Option<MaterialId> {
         let (c, l) = pos.to_chunk_local();
@@ -181,6 +193,20 @@ mod tests {
         assert!(w.remove(b).is_none());
         assert_eq!(w.take_unloaded(), vec![b]);
         assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn detach_and_attach_are_silent() {
+        let mut w = World::new();
+        let a = ChunkPos::new(0, 0, 0);
+        w.insert(a, Chunk::uniform(MaterialId::AIR));
+        w.pop_loaded();
+        let c = w.detach(a).unwrap();
+        assert!(!w.contains(a));
+        w.attach(a, c);
+        assert!(w.contains(a));
+        assert!(w.take_unloaded().is_empty());
+        assert_eq!(w.pending_loaded(), 0);
     }
 
     #[test]
