@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use mv_core::config::SimConfig;
 use mv_core::{ChunkPos, WorldPos};
-use mv_materials::{MaterialId, MaterialRegistry};
+use mv_materials::{MaterialId, MaterialRegistry, ReactionSet};
 use mv_sim::Simulation;
 use mv_world::edit::fill_box;
 use mv_world::{Chunk, World};
@@ -55,7 +55,9 @@ fn main() {
         |_| true,
     );
 
-    let mut sim = Simulation::new(&registry, &SimConfig::default());
+    let reactions_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/reactions");
+    let reactions = ReactionSet::load_dir(reactions_dir.as_ref(), &registry).expect("reactions");
+    let mut sim = Simulation::new(&registry, &reactions, &SimConfig::default());
     let ice = place(
         &mut world,
         &mut sim,

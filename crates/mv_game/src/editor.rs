@@ -39,6 +39,27 @@ pub struct Brush {
     pub selected: usize,
 }
 
+/// Placeable materials (everything but air) and, per material, whether `Place`
+/// may overwrite it (air, liquids, gases and energy such as fire).
+fn material_lists(registry: &MaterialRegistry) -> (Vec<MaterialId>, Vec<bool>) {
+    let placeable = registry
+        .iter()
+        .filter(|(id, _)| !id.is_air())
+        .map(|(id, _)| id)
+        .collect();
+    let overwritable = registry
+        .iter()
+        .map(|(id, m)| {
+            id.is_air()
+                || matches!(
+                    m.state,
+                    MatterState::Liquid | MatterState::Gas | MatterState::Energy
+                )
+        })
+        .collect();
+    (placeable, overwritable)
+}
+
 #[derive(Debug)]
 pub struct Editor {
     pub brush: Brush,
@@ -55,15 +76,7 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(config: &EditorConfig, registry: &MaterialRegistry) -> Self {
-        let placeable: Vec<MaterialId> = registry
-            .iter()
-            .filter(|(id, _)| !id.is_air())
-            .map(|(id, _)| id)
-            .collect();
-        let overwritable = registry
-            .iter()
-            .map(|(id, m)| id.is_air() || matches!(m.state, MatterState::Liquid | MatterState::Gas))
-            .collect();
+        let (placeable, overwritable) = material_lists(registry);
         let selected = registry
             .id("sand")
             .and_then(|sand| placeable.iter().position(|&id| id == sand))
@@ -86,6 +99,17 @@ impl Editor {
 
     pub fn placeable(&self) -> &[MaterialId] {
         &self.placeable
+    }
+
+    /// Rebuilds the material lists after a hot reload, keeping the selection.
+    pub fn set_materials(&mut self, registry: &MaterialRegistry) {
+        let selected = self.selected_material();
+        let (placeable, overwritable) = material_lists(registry);
+        self.brush.selected = selected
+            .and_then(|m| placeable.iter().position(|&id| id == m))
+            .unwrap_or(0);
+        self.placeable = placeable;
+        self.overwritable = overwritable;
     }
 
     pub fn selected_material(&self) -> Option<MaterialId> {

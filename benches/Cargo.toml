@@ -44,5 +44,10 @@ harness = false
 name = "sim_thermal"
 harness = false
 
+# Milestone 5: a forest fire, report ms/tick of reactions + combustion.
+[[bench]]
+name = "sim_fire"
+harness = false
+
 [lints]
 workspace = true

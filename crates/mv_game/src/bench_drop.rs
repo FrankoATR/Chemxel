@@ -1,8 +1,10 @@
-//! `--bench-drop` / `--bench-heat`: simulation benchmarks in the real game.
+//! `--bench-drop` / `--bench-heat` / `--bench-fire`: simulation benchmarks in the
+//! real game.
 //!
 //! Waits until the world around the spawn point is loaded, spawns a scenario on
-//! the terrain below the camera (sand + water, or lava on ice), then records every
-//! simulation tick for a while, logs the timings and asks the app to exit.
+//! the terrain below the camera (sand + water, lava on ice, or a forest fire), then
+//! records every simulation tick for a while, logs the timings and asks the app to
+//! exit.
 
 use std::time::Duration;
 
@@ -20,6 +22,8 @@ pub struct BenchDrop {
     max_moves: u32,
     max_thermal: usize,
     max_transitions: u32,
+    max_reactions: u32,
+    max_flames: u32,
 }
 
 impl BenchDrop {
@@ -33,6 +37,8 @@ impl BenchDrop {
             max_moves: 0,
             max_thermal: 0,
             max_transitions: 0,
+            max_reactions: 0,
+            max_flames: 0,
         }
     }
 
@@ -52,6 +58,8 @@ impl BenchDrop {
             self.max_moves = self.max_moves.max(stats.moves);
             self.max_thermal = self.max_thermal.max(stats.thermal_chunks);
             self.max_transitions = self.max_transitions.max(stats.transitions);
+            self.max_reactions = self.max_reactions.max(stats.reactions);
+            self.max_flames = self.max_flames.max(stats.flames);
         }
     }
 
@@ -74,7 +82,7 @@ impl BenchDrop {
         ms.sort_by(f64::total_cmp);
         let pct = |p: f64| ms[((ms.len() - 1) as f64 * p).round() as usize];
         format!(
-            "bench {:?}: {} ticks: avg {:.2} ms, p50 {:.2}, p95 {:.2}, max {:.2} ms/tick; max active chunks {}, max moves/tick {}, max thermal chunks {}, max phase changes/tick {}",
+            "bench {:?}: {} ticks: avg {:.2} ms, p50 {:.2}, p95 {:.2}, max {:.2} ms/tick; max active chunks {}, max moves/tick {}, max thermal chunks {}, max phase changes/tick {}, max reactions/tick {}, max flames/tick {}",
             self.scenario,
             ms.len(),
             ms.iter().sum::<f64>() / ms.len() as f64,
@@ -84,7 +92,9 @@ impl BenchDrop {
             self.max_active,
             self.max_moves,
             self.max_thermal,
-            self.max_transitions
+            self.max_transitions,
+            self.max_reactions,
+            self.max_flames
         )
     }
 }

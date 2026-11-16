@@ -5,12 +5,13 @@
 //! and upload changes, build the debug UI and render once. Rendering never mutates
 //! simulation state.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use mv_core::{Config, FixedTimestep};
-use mv_materials::MaterialRegistry;
+use mv_materials::{MaterialRegistry, ReactionSet};
 use mv_render::{Camera, GpuContext, Renderer, SurfaceSize, VolumeStats};
 use mv_sim::Simulation;
 use mv_world::WorldStats;
@@ -31,6 +32,7 @@ use crate::fly_camera::FlyController;
 use crate::frame_timer::FrameTimer;
 use crate::game_world::{self, GameWorld, SyncStats};
 use crate::gui::Gui;
+use crate::hot_reload::HotReload;
 use crate::input::InputState;
 use crate::overlay::{self, OverlayData, Timings};
 
@@ -42,6 +44,14 @@ struct Running {
     window: Arc<Window>,
     renderer: Renderer,
     gui: Gui,
+}
+
+/// Materials, reactions and where they come from (for hot reload).
+pub struct Materials {
+    pub registry: MaterialRegistry,
+    pub reactions: ReactionSet,
+    pub assets: PathBuf,
+    pub hot_reload: Option<HotReload>,
 }
 
 /// Slow-changing statistics shown by the overlay.
@@ -57,6 +67,8 @@ struct Stats {
 pub struct App {
     config: Config,
     registry: MaterialRegistry,
+    assets: PathBuf,
+    hot_reload: Option<HotReload>,
     world: GameWorld,
     sim: Simulation,
     timestep: FixedTimestep,
@@ -79,7 +91,7 @@ pub struct App {
 impl App {
     pub fn new(
         config: Config,
-        registry: MaterialRegistry,
+        materials: Materials,
         world: GameWorld,
         bench: Option<BenchFly>,
         bench_drop: Option<BenchDrop>,
@@ -92,11 +104,19 @@ impl App {
             config.render.fov_y_deg.to_radians(),
         );
         let fly = FlyController::new(&config.controls);
+        let Materials {
+            registry,
+            reactions,
+            assets,
+            hot_reload,
+        } = materials;
         let editor = Editor::new(&config.editor, &registry);
-        let sim = Simulation::new(&registry, &config.sim);
+        let sim = Simulation::new(&registry, &reactions, &config.sim);
         Self {
             config,
             registry,
+            assets,
+            hot_reload,
             world,
             sim,
             timestep,
@@ -186,9 +206,50 @@ impl App {
         self.input.take_mouse_delta();
     }
 
+    /// Reloads materials and reactions after their RON files changed. Invalid files
+    /// or renumbered materials are rejected and the current tables kept.
+    fn reload_materials(&mut self) {
+        let registry = match MaterialRegistry::load_dir(&self.assets.join("materials")) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("hot reload rejected: {e}");
+                return;
+            }
+        };
+        if let Err(name) = registry.keeps_ids_of(&self.registry) {
+            tracing::error!(
+                "hot reload rejected: material \"{name}\" was removed or moved (materials may only be appended or edited)"
+            );
+            return;
+        }
+        let reactions = match ReactionSet::load_dir(&self.assets.join("reactions"), &registry) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("hot reload rejected: {e}");
+                return;
+            }
+        };
+        self.sim
+            .set_materials(&registry, &reactions, &self.world.world);
+        self.editor.set_materials(&registry);
+        if let Some(r) = self.running.as_mut() {
+            r.renderer
+                .set_materials(&game_world::gpu_materials(&registry));
+        }
+        tracing::info!(
+            "hot reload: {} materials, {} reactions",
+            registry.len(),
+            reactions.len()
+        );
+        self.registry = registry;
+    }
+
     fn redraw(&mut self) {
         let (dt, fps) = self.frame_timer.tick();
         self.stats.timings.frame.add(dt.as_secs_f64() * 1000.0);
+        if self.hot_reload.as_mut().is_some_and(|h| h.poll(dt)) {
+            self.reload_materials();
+        }
 
         let t = Instant::now();
         let ticks = self.timestep.advance(dt);
@@ -214,7 +275,14 @@ impl App {
             {
                 r.renderer.set_heat_view(true);
             }
-            self.spawn_scenario(self.ground_below_camera(), scenario);
+            let ground = self.ground_below_camera();
+            if scenario == drop_test::Scenario::ForestFire {
+                // Look at the forest from the side, a bit above the canopies.
+                self.camera.position = ground.0.as_dvec3() + glam::DVec3::new(-110.0, 90.0, -110.0);
+                self.camera.yaw = std::f32::consts::FRAC_PI_4;
+                self.camera.pitch = -0.35;
+            }
+            self.spawn_scenario(ground, scenario);
         }
         if finished && let Some(b) = self.bench_drop.take() {
             tracing::info!("{}", b.report());
@@ -377,6 +445,8 @@ impl App {
             Some(drop_test::Scenario::SandAndWater)
         } else if actions.lava_on_ice {
             Some(drop_test::Scenario::LavaOnIce)
+        } else if actions.forest_fire {
+            Some(drop_test::Scenario::ForestFire)
         } else {
             None
         };

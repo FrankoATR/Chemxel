@@ -66,6 +66,7 @@ const MIB: f64 = 1024.0 * 1024.0;
 pub struct OverlayActions {
     pub drop_test: bool,
     pub lava_on_ice: bool,
+    pub forest_fire: bool,
     pub toggle_pause: bool,
 }
 
@@ -122,6 +123,14 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
         );
         row(
             ui,
+            "Chemistry",
+            format!(
+                "{} reactions, {} decays, {} flames/tick",
+                s.reactions, s.decays, s.flames
+            ),
+        );
+        row(
+            ui,
             "Target temp.",
             d.target_temperature
                 .map_or_else(|| "-".to_owned(), |t| format!("{t:.1} °C")),
@@ -144,6 +153,13 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
             .clicked()
         {
             actions.lava_on_ice = true;
+        }
+        if ui
+            .button("Forest fire")
+            .on_hover_text("A 6×6 forest around the voxel under the crosshair, lit at one corner")
+            .clicked()
+        {
+            actions.forest_fire = true;
         }
         let label = if d.sim_paused {
             "Resume (P)"
