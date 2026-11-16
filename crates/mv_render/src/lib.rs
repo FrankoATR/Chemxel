@@ -1,12 +1,20 @@
 //! GPU renderer built on wgpu.
 //!
-//! Milestone 0 only clears the screen. From milestone 1 on this crate hosts the
-//! brickmap upload and the compute-shader voxel raymarcher (see `PROMPT.md` §7).
+//! Voxels are drawn by a compute shader that raymarches a brickmap with a
+//! hierarchical DDA (bricks, then voxels), writes an HDR texture, and a blit pass
+//! tonemaps it onto the swapchain. See `PROMPT.md` §7.
 
+mod blit;
+mod camera;
 mod context;
+mod gpu_volume;
+mod raymarch;
 mod renderer;
+mod slots;
 
+pub use camera::Camera;
 pub use context::{GpuContext, SurfaceSize};
+pub use gpu_volume::{EMPTY, GpuVolume, MAX_MATERIALS, MaterialGpu, UploadStats, VolumeDesc};
 pub use renderer::{FrameStats, Renderer};
 
 #[derive(Debug, thiserror::Error)]

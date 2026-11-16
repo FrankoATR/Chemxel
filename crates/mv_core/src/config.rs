@@ -36,6 +36,7 @@ pub struct Config {
     pub window: WindowConfig,
     pub sim: SimConfig,
     pub render: RenderConfig,
+    pub controls: ControlsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,8 +85,10 @@ pub struct RenderConfig {
     pub vsync: bool,
     /// Render distance in chunks.
     pub render_distance_chunks: u32,
-    /// Background clear colour (linear RGB).
-    pub clear_color: [f64; 3],
+    /// Capacity of the GPU brick pool, in 8³ bricks (1 KiB each).
+    pub brick_pool_capacity: u32,
+    /// Vertical field of view in degrees.
+    pub fov_y_deg: f32,
 }
 
 impl Default for RenderConfig {
@@ -93,15 +96,42 @@ impl Default for RenderConfig {
         Self {
             vsync: true,
             render_distance_chunks: 16,
-            clear_color: [0.05, 0.07, 0.12],
+            brick_pool_capacity: 65_536,
+            fov_y_deg: 70.0,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ControlsConfig {
+    /// Fly speed in metres per second (1 m = 16 microvoxels).
+    pub fly_speed: f32,
+    /// Speed multiplier while holding the "fast" key.
+    pub fast_multiplier: f32,
+    /// Radians of rotation per pixel of mouse motion.
+    pub mouse_sensitivity: f32,
+}
+
+impl Default for ControlsConfig {
+    fn default() -> Self {
+        Self {
+            fly_speed: 4.0,
+            fast_multiplier: 5.0,
+            mouse_sensitivity: 0.0025,
+        }
+    }
+}
+
+/// Removes a UTF-8 byte order mark, which some Windows editors add and RON rejects.
+fn strip_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
 impl Config {
     /// Parses and validates a configuration from RON text.
     pub fn from_ron(text: &str, origin: &str) -> Result<Self, ConfigError> {
-        let config: Self = ron::from_str(text).map_err(|source| ConfigError::Parse {
+        let config: Self = ron::from_str(strip_bom(text)).map_err(|source| ConfigError::Parse {
             path: origin.to_owned(),
             source: Box::new(source),
         })?;
@@ -145,6 +175,12 @@ impl Config {
         if self.sim.max_ticks_per_frame == 0 {
             return invalid("sim.max_ticks_per_frame", "must be at least 1");
         }
+        if !(1.0..=170.0).contains(&self.render.fov_y_deg) {
+            return invalid("render.fov_y_deg", "must be between 1 and 170");
+        }
+        if self.render.brick_pool_capacity == 0 {
+            return invalid("render.brick_pool_capacity", "must be at least 1");
+        }
         if self.window.width == 0 || self.window.height == 0 {
             return invalid("window.width/height", "must be non-zero");
         }
@@ -170,6 +206,12 @@ mod tests {
             SimConfig::default().max_ticks_per_frame
         );
         assert_eq!(c.window, WindowConfig::default());
+    }
+
+    #[test]
+    fn accepts_utf8_bom() {
+        let c = Config::from_ron("\u{feff}(sim: (seed: 7))", "test").unwrap();
+        assert_eq!(c.sim.seed, 7);
     }
 
     #[test]

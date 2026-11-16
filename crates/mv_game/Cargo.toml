@@ -18,6 +18,9 @@ profile = ["dep:tracing-tracy"]
 
 [dependencies]
 mv_core.workspace = true
+mv_materials.workspace = true
+mv_world.workspace = true
+glam.workspace = true
 mv_sim.workspace = true
 mv_render.workspace = true
 winit.workspace = true

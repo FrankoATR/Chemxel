@@ -10,7 +10,11 @@ publish.workspace = true
 # Deliberately does not depend on winit: the renderer accepts any surface target,
 # so it can be driven by other windowing layers (or none, for offscreen tests).
 [dependencies]
+mv_core.workspace = true
+mv_world.workspace = true
 wgpu.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
