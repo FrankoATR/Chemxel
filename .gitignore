@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+*.pdb
+# Local saves and profiling captures
+/saves
+*.tracy
+# Editors / OS
+.idea/
+.DS_Store
+Thumbs.db
