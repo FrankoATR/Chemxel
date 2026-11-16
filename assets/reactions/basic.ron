@@ -10,7 +10,7 @@
 
     // Flames heat what they touch; the heated fuel ignites by temperature.
     Reaction(a: "fire",  b: "wood",   probability: 0.3, heat: 300000),
-    Reaction(a: "fire",  b: "leaves", probability: 0.4, heat: 300000),
+    Reaction(a: "fire",  b: "leaves", probability: 0.4, heat: 500000),
     Reaction(a: "fire",  b: "grass",  probability: 0.1, heat: 100000),
     // Water and ice put flames out.
     Reaction(a: "fire",  b: "water",  result_a: "smoke", probability: 0.5),

@@ -50,7 +50,7 @@ fn fixture(seed: u64) -> Fixture {
         ..SimConfig::default()
     };
     Fixture {
-        sim: Simulation::new(&registry, &config),
+        sim: Simulation::new(&registry, &ReactionSet::empty(&registry), &config),
         world,
         stone,
         sand: id("sand"),

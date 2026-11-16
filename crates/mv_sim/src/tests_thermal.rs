@@ -34,7 +34,11 @@ fn fixture() -> Fixture {
     let stone = registry.id("stone").unwrap();
     fill_box(&mut world, w(-64, 0, -64), w(127, 0, 127), stone, |_| true);
     Fixture {
-        sim: Simulation::new(&registry, &SimConfig::default()),
+        sim: Simulation::new(
+            &registry,
+            &ReactionSet::empty(&registry),
+            &SimConfig::default(),
+        ),
         world,
         registry,
     }
