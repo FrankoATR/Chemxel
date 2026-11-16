@@ -29,7 +29,8 @@ pub struct BrushPreview {
 pub struct OverlayTarget<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
-    /// Swapchain view, already containing the tonemapped frame.
+    /// Swapchain view (format [`GpuContext::overlay_format`], i.e. not sRGB),
+    /// already containing the tonemapped frame.
     pub view: &'a wgpu::TextureView,
     pub size: SurfaceSize,
 }
@@ -137,11 +138,15 @@ impl Renderer {
         self.raymarch
             .dispatch(&self.ctx.queue, &mut encoder, &uniform);
         self.blit.draw(&mut encoder, &target);
+        let overlay_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.ctx.overlay_format()),
+            ..Default::default()
+        });
         let mut before = overlay(
             &OverlayTarget {
                 device: &self.ctx.device,
                 queue: &self.ctx.queue,
-                view: &target,
+                view: &overlay_view,
                 size: self.ctx.size(),
             },
             &mut encoder,

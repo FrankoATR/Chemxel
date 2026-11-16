@@ -88,6 +88,11 @@ impl GpuContext {
         if let Some(srgb) = caps.formats.iter().copied().find(|f| f.is_srgb()) {
             config.format = srgb;
         }
+        // Overlays (egui) blend in gamma space and want a non-sRGB view of the same image.
+        let overlay = config.format.remove_srgb_suffix();
+        if overlay != config.format {
+            config.view_formats.push(overlay);
+        }
         config.present_mode = if vsync {
             wgpu::PresentMode::AutoVsync
         } else {
@@ -127,6 +132,12 @@ impl GpuContext {
 
     pub fn surface_format(&self) -> wgpu::TextureFormat {
         self.config.format
+    }
+
+    /// Format of the swapchain view given to overlays: the non-sRGB variant of
+    /// [`GpuContext::surface_format`].
+    pub fn overlay_format(&self) -> wgpu::TextureFormat {
+        self.config.format.remove_srgb_suffix()
     }
 
     /// Acquires the next swapchain image, or `None` if this frame should be skipped.
