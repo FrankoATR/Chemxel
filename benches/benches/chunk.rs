@@ -1,10 +1,10 @@
-//! Chunk generation and brick extraction (the CPU side of a GPU upload).
+//! Chunk generation and brick classification (the CPU side of a GPU upload).
 
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use mv_core::ChunkPos;
-use mv_core::consts::{BRICK_VOLUME, BRICKS_PER_CHUNK};
+use mv_core::consts::BRICKS_PER_CHUNK;
 use mv_world::testgen::{TestPalette, sine_terrain_scene};
 use mv_world::{Chunk, MaterialId};
 
@@ -30,16 +30,15 @@ fn generate(c: &mut Criterion) {
     });
 }
 
-fn copy_bricks(c: &mut Criterion) {
+fn scan_bricks(c: &mut Criterion) {
     let chunk = scene();
-    let mut out = [MaterialId::AIR; BRICK_VOLUME];
-    c.bench_function("chunk_copy_all_512_bricks", |b| {
+    c.bench_function("chunk_classify_all_512_bricks", |b| {
         b.iter(|| {
-            let mut occupied = 0;
+            let mut uniform = 0;
             for brick in 0..BRICKS_PER_CHUNK {
-                occupied += u32::from(chunk.copy_brick(black_box(brick), &mut out));
+                uniform += u32::from(chunk.brick(black_box(brick)).uniform_material().is_some());
             }
-            occupied
+            uniform
         });
     });
 }
@@ -51,5 +50,5 @@ fn occupancy(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, generate, copy_bricks, occupancy);
+criterion_group!(benches, generate, scan_bricks, occupancy);
 criterion_main!(benches);

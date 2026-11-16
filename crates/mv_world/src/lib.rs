@@ -1,7 +1,7 @@
 //! Voxel world storage.
 //!
-//! * [`Chunk`]: 64³ microvoxels, stored either as a single material
-//!   ([`ChunkData::Uniform`]) or as a dense structure-of-arrays.
+//! * [`Chunk`]: 64³ microvoxels, stored as a single material or as 512 bricks of 8³
+//!   that are themselves uniform or dense (ADR 004).
 //! * [`BrickMask`]: one bit per 8³ render brick of a chunk (512 bits).
 //! * [`testgen`]: deterministic test scenes used by the early milestones.
 //!
@@ -12,7 +12,7 @@ mod chunk;
 pub mod testgen;
 
 pub use brick_mask::BrickMask;
-pub use chunk::{Chunk, ChunkData};
+pub use chunk::{Brick, BrickRef, BrickTable, BrickVoxels, Chunk, ChunkData};
 // Re-exported so consumers of chunk data (e.g. the renderer) need not depend on
 // mv_materials directly.
 pub use mv_materials::MaterialId;

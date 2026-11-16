@@ -14,7 +14,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, UVec3};
 use mv_core::ChunkPos;
 use mv_core::consts::{BRICK_VOLUME, BRICKS_PER_CHUNK};
-use mv_world::{Chunk, MaterialId};
+use mv_world::{BrickRef, Chunk, MaterialId};
 
 use crate::slots::SlotAllocator;
 
@@ -224,7 +224,16 @@ impl GpuVolume {
         // GPU would read stale or zeroed entries (zero is a valid brick slot).
         let mut table_changed = new_chunk;
         for brick in dirty.iter() {
-            let occupied = chunk.copy_brick(brick, &mut self.scratch);
+            let occupied = match chunk.brick(brick) {
+                BrickRef::Uniform(m) => {
+                    self.scratch.fill(m);
+                    !m.is_air()
+                }
+                BrickRef::Dense(voxels) => {
+                    self.scratch.copy_from_slice(voxels);
+                    voxels.iter().any(|m| !m.is_air())
+                }
+            };
             let entry = &mut self.chunk_bricks[table_base + brick];
             if occupied {
                 if *entry == EMPTY {

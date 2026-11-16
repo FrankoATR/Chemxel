@@ -9,12 +9,16 @@
 //! Conversions use arithmetic shifts and masks (chunk size is 2⁶), which handle
 //! negative coordinates correctly: world `x = -1` lives in chunk `-1` at local `63`.
 //!
-//! # Linear index order
+//! # Index orders
 //!
-//! Voxel data inside a chunk is stored in a flat array indexed by
-//! [`LocalPos::index`] = `x + y * 64 + z * 64²` (X fastest, then Y, then Z).
-//! Every crate must use this order; iterate `z` outermost and `x` innermost to walk
-//! memory sequentially.
+//! Every linear index in the engine is X fastest, then Y, then Z:
+//!
+//! * [`LocalPos::index`] = `x + y*64 + z*64²`: flat index over a whole chunk.
+//! * [`LocalPos::brick_index`]: 8³ brick of the voxel inside its chunk (`bx + by*8 + bz*64`).
+//! * [`LocalPos::brick_local_index`]: voxel inside its brick (`x%8 + (y%8)*8 + (z%8)*64`).
+//!
+//! Chunk voxel storage is brick-major (brick index, then brick-local index; see
+//! ADR 004). Iterate `z` outermost and `x` innermost to walk memory sequentially.
 
 use glam::{I64Vec3, IVec3};
 use serde::{Deserialize, Serialize};
@@ -139,6 +143,29 @@ impl LocalPos {
         bx + by * BRICKS_PER_CHUNK_AXIS + bz * BRICKS_PER_CHUNK_AXIS * BRICKS_PER_CHUNK_AXIS
     }
 
+    /// Index of this voxel inside its 8³ brick: `x%8 + (y%8)*8 + (z%8)*64`
+    /// (X fastest, like every other index in the engine).
+    #[inline]
+    pub const fn brick_local_index(self) -> usize {
+        let m = (1 << BRICK_SIZE_LOG2) - 1;
+        ((self.x & m) as usize)
+            | (((self.y & m) as usize) << BRICK_SIZE_LOG2)
+            | (((self.z & m) as usize) << (2 * BRICK_SIZE_LOG2))
+    }
+
+    /// Inverse of the pair ([`LocalPos::brick_index`], [`LocalPos::brick_local_index`]).
+    #[inline]
+    pub const fn from_brick(brick: usize, local: usize) -> Self {
+        let a = BRICKS_PER_CHUNK_AXIS;
+        let m = (1 << BRICK_SIZE_LOG2) - 1;
+        let s = BRICK_SIZE_LOG2;
+        Self {
+            x: (((brick % a) << s) | (local & m)) as u8,
+            y: ((((brick / a) % a) << s) | ((local >> s) & m)) as u8,
+            z: (((brick / (a * a)) << s) | ((local >> (2 * s)) & m)) as u8,
+        }
+    }
+
     #[inline]
     pub fn as_ivec3(self) -> IVec3 {
         IVec3::new(self.x.into(), self.y.into(), self.z.into())
@@ -230,6 +257,21 @@ mod tests {
         assert_eq!(LocalPos::new(0, 1, 0).index(), 64);
         assert_eq!(LocalPos::new(0, 0, 1).index(), 64 * 64);
         assert_eq!(LocalPos::new(63, 63, 63).index(), CHUNK_VOLUME - 1);
+    }
+
+    #[test]
+    fn brick_split_roundtrip_exhaustive() {
+        let mut seen = vec![false; CHUNK_VOLUME];
+        for index in 0..CHUNK_VOLUME {
+            let p = LocalPos::from_index(index);
+            let (b, l) = (p.brick_index(), p.brick_local_index());
+            assert!(l < 512 && b < 512);
+            assert_eq!(LocalPos::from_brick(b, l), p);
+            let flat = b * 512 + l;
+            assert!(!seen[flat], "brick split is not injective at {p:?}");
+            seen[flat] = true;
+        }
+        assert_eq!(LocalPos::new(10, 3, 17).brick_local_index(), 2 + 3 * 8 + 64);
     }
 
     #[test]
