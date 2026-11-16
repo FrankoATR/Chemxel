@@ -6,12 +6,16 @@
 //! * [`World`]: the loaded chunks plus change queues (loaded / edited / unloaded).
 //! * [`terrain`]: deterministic heightmap terrain from noise.
 //! * [`stream`]: loads chunks around a centre in the background, unloads far ones.
+//! * [`raycast`]: voxel picking with a CPU DDA.
+//! * [`edit`]: editing tools (spherical brush).
 //! * [`testgen`]: small deterministic scenes for tests and benchmarks.
 //!
 //! This crate is headless: no rendering or windowing dependencies.
 
 mod brick_mask;
 mod chunk;
+pub mod edit;
+pub mod raycast;
 pub mod stream;
 pub mod terrain;
 pub mod testgen;
