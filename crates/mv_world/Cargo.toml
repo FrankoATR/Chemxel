@@ -10,6 +10,10 @@ publish.workspace = true
 [dependencies]
 mv_core.workspace = true
 mv_materials.workspace = true
+glam.workspace = true
+rayon.workspace = true
+noise.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

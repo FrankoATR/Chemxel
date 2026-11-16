@@ -36,7 +36,9 @@ pub struct Config {
     pub window: WindowConfig,
     pub sim: SimConfig,
     pub render: RenderConfig,
+    pub world: WorldConfig,
     pub controls: ControlsConfig,
+    pub editor: EditorConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,10 +85,16 @@ impl Default for SimConfig {
 pub struct RenderConfig {
     /// Wait for vertical sync. Disable to measure uncapped FPS.
     pub vsync: bool,
-    /// Render distance in chunks.
+    /// Horizontal render (and load) distance in chunks.
     pub render_distance_chunks: u32,
+    /// Vertical render (and load) distance in chunks, above and below the camera.
+    pub render_height_chunks: u32,
     /// Capacity of the GPU brick pool, in 8³ bricks (1 KiB each).
     pub brick_pool_capacity: u32,
+    /// Max non-uniform chunks resident on the GPU (2 KiB of brick table each).
+    pub chunk_slot_capacity: u32,
+    /// Max bytes of streamed chunk data uploaded per frame (edits are never delayed).
+    pub upload_budget_kib: u32,
     /// Vertical field of view in degrees.
     pub fov_y_deg: f32,
 }
@@ -96,8 +104,103 @@ impl Default for RenderConfig {
         Self {
             vsync: true,
             render_distance_chunks: 16,
-            brick_pool_capacity: 65_536,
+            render_height_chunks: 4,
+            brick_pool_capacity: 262_144,
+            chunk_slot_capacity: 8192,
+            upload_budget_kib: 8192,
             fov_y_deg: 70.0,
+        }
+    }
+}
+
+/// World generation and streaming. Distances and heights are in microvoxels unless
+/// the name says otherwise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorldConfig {
+    /// Water fills every empty voxel below this height.
+    pub sea_level: i32,
+    pub terrain: TerrainConfig,
+    /// Extra chunks beyond the render distance before a chunk is unloaded
+    /// (hysteresis, avoids load/unload thrashing at the border).
+    pub unload_margin_chunks: u32,
+    /// Max chunks being generated in the background at once.
+    pub max_inflight_jobs: u32,
+}
+
+impl Default for WorldConfig {
+    fn default() -> Self {
+        Self {
+            sea_level: 0,
+            terrain: TerrainConfig::default(),
+            unload_margin_chunks: 2,
+            max_inflight_jobs: 64,
+        }
+    }
+}
+
+/// Heightmap terrain: `base + hills + detail + mountains`, each from fBm noise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerrainConfig {
+    pub base_height: f64,
+    /// Large rolling hills.
+    pub hills_amplitude: f64,
+    pub hills_wavelength: f64,
+    /// Small bumps on top of the hills.
+    pub detail_amplitude: f64,
+    pub detail_wavelength: f64,
+    /// Ridged mountains, masked to appear only in some regions.
+    pub mountain_amplitude: f64,
+    pub mountain_wavelength: f64,
+    pub octaves: u32,
+    /// Depth of the dirt layer below the surface.
+    pub dirt_depth: i32,
+    /// Depth of the grass layer on top of the dirt.
+    pub grass_depth: i32,
+    /// Columns whose surface is at most this far above sea level become sand.
+    pub beach_height: i32,
+}
+
+impl Default for TerrainConfig {
+    fn default() -> Self {
+        Self {
+            base_height: 24.0,
+            hills_amplitude: 96.0,
+            hills_wavelength: 1400.0,
+            detail_amplitude: 10.0,
+            detail_wavelength: 160.0,
+            mountain_amplitude: 320.0,
+            mountain_wavelength: 2200.0,
+            octaves: 5,
+            dirt_depth: 24,
+            grass_depth: 2,
+            beach_height: 6,
+        }
+    }
+}
+
+/// Voxel editing brush.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EditorConfig {
+    /// Initial brush radius in microvoxels.
+    pub brush_radius: f32,
+    /// Largest brush radius selectable.
+    pub max_brush_radius: f32,
+    /// Max picking distance in microvoxels.
+    pub reach: f64,
+    /// Brush applications per second while a mouse button is held.
+    pub repeat_hz: f32,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        Self {
+            brush_radius: 6.0,
+            max_brush_radius: 48.0,
+            reach: 1024.0,
+            repeat_hz: 12.0,
         }
     }
 }
@@ -180,6 +283,41 @@ impl Config {
         }
         if self.render.brick_pool_capacity == 0 {
             return invalid("render.brick_pool_capacity", "must be at least 1");
+        }
+        if self.render.chunk_slot_capacity == 0 {
+            return invalid("render.chunk_slot_capacity", "must be at least 1");
+        }
+        if !(1..=64).contains(&self.render.render_distance_chunks) {
+            return invalid("render.render_distance_chunks", "must be between 1 and 64");
+        }
+        if !(1..=32).contains(&self.render.render_height_chunks) {
+            return invalid("render.render_height_chunks", "must be between 1 and 32");
+        }
+        if self.render.upload_budget_kib == 0 {
+            return invalid("render.upload_budget_kib", "must be at least 1");
+        }
+        if self.world.max_inflight_jobs == 0 {
+            return invalid("world.max_inflight_jobs", "must be at least 1");
+        }
+        let t = &self.world.terrain;
+        if !(1..=16).contains(&t.octaves) {
+            return invalid("world.terrain.octaves", "must be between 1 and 16");
+        }
+        if t.hills_wavelength <= 0.0 || t.detail_wavelength <= 0.0 || t.mountain_wavelength <= 0.0 {
+            return invalid("world.terrain.*_wavelength", "must be positive");
+        }
+        if t.dirt_depth < t.grass_depth || t.grass_depth < 0 {
+            return invalid("world.terrain.dirt_depth", "must be >= grass_depth >= 0");
+        }
+        let e = &self.editor;
+        if !(e.max_brush_radius >= 1.0 && (0.5..=e.max_brush_radius).contains(&e.brush_radius)) {
+            return invalid(
+                "editor.brush_radius",
+                "must be between 0.5 and max_brush_radius (>= 1)",
+            );
+        }
+        if !(e.reach > 0.0 && e.repeat_hz > 0.0) {
+            return invalid("editor.reach/repeat_hz", "must be positive");
         }
         if self.window.width == 0 || self.window.height == 0 {
             return invalid("window.width/height", "must be non-zero");
