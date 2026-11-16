@@ -22,6 +22,11 @@ pub(crate) struct Material {
     /// kJ/(kg·K).
     #[serde(default = "default_heat_capacity")]
     pub heat_capacity: f32,
+    /// Latent energy stored per voxel, relative to the material's lowest phase, in the
+    /// same units as `density × heat_capacity` per kelvin. A transition releases or
+    /// absorbs the difference between the two materials' values.
+    #[serde(default)]
+    pub latent_heat: f32,
     /// Emitted light intensity (0 = none).
     #[serde(default)]
     pub emissive: f32,

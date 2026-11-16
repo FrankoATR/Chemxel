@@ -59,6 +59,8 @@ pub struct Material {
     pub color: [u8; 4],
     pub conductivity: f32,
     pub heat_capacity: f32,
+    /// Latent energy per voxel relative to the lowest phase (see the README).
+    pub latent_heat: f32,
     pub emissive: f32,
     pub dispersion: u8,
     pub lifetime: Option<(u32, u32)>,
@@ -279,6 +281,7 @@ fn resolve(
         color: [r, g, b, a],
         conductivity: d.conductivity,
         heat_capacity: d.heat_capacity,
+        latent_heat: d.latent_heat,
         emissive: d.emissive,
         dispersion: d.dispersion,
         lifetime: d.lifetime,

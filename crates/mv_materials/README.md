@@ -26,6 +26,7 @@ contigua indexada por `MaterialId` (`u16`).
 | `color` | `(r, g, b, a)` 0–255 | — (obligatorio) | Color sRGB; `a` < 255 = translúcido |
 | `conductivity` | número | `0` | Conductividad térmica, W/(m·K) |
 | `heat_capacity` | número | `1.0` | Capacidad calorífica, kJ/(kg·K) |
+| `latent_heat` | número | `0` | Energía latente por vóxel respecto a la fase más baja (ver abajo) |
 | `emissive` | número | `0` | Intensidad de luz emitida |
 | `dispersion` | entero 0–255 | `0` | Celdas que un líquido/gas se expande en horizontal por tick |
 | `lifetime` | `(min, max)` ticks | ninguno | Vida aleatoria; al expirar el vóxel desaparece |
@@ -36,6 +37,14 @@ contigua indexada por `MaterialId` (`u16`).
 | `flammable` | bool | `false` | Puede arder |
 | `ignite_at` / `burns_into` | °C / nombre | ninguno | Ignición y producto de la combustión |
 | `burn_rate` | 0–1 | `0` | Probabilidad por tick de consumirse mientras arde |
+
+## Unidades térmicas
+
+La simulación (ADR 007) usa como capacidad calorífica de un vóxel `density × heat_capacity`
+(energía por kelvin). `latent_heat` usa esas mismas unidades: un cambio `A → B` absorbe
+`latent_heat(B) − latent_heat(A)` de su celda de temperatura, o lo libera si es negativo.
+Los valores son de juego, no físicos. Un vóxel conserva su volumen al cambiar de fase, así
+que con los valores reales el vapor al condensarse calentaría el aire miles de grados.
 
 ## Ejemplo
 
