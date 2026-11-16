@@ -22,7 +22,7 @@ pub mod testgen;
 mod world;
 
 pub use brick_mask::BrickMask;
-pub use chunk::{Brick, BrickRef, BrickTable, BrickVoxels, Chunk, ChunkData};
+pub use chunk::{Brick, BrickRef, BrickTable, BrickVoxels, Chunk, ChunkData, material_bit};
 // Re-exported so consumers of chunk data (e.g. the renderer) need not depend on
 // mv_materials directly.
 pub use mv_materials::MaterialId;

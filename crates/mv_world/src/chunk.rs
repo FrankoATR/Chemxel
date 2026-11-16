@@ -112,6 +112,17 @@ pub struct Chunk {
     /// Whether any voxel changed since the chunk was generated. Modified chunks must
     /// be kept (and later saved) instead of regenerated.
     modified: bool,
+    /// Superset of the materials present: bit `id % 64` (see [`material_bit`]). Set
+    /// on every write, recomputed exactly by [`Chunk::compact`]. Lets the simulation
+    /// skip reaction lookups when no partner material is nearby.
+    materials: u64,
+}
+
+/// Bit of `m` in a material mask (ids above 63 alias, which only adds false
+/// positives).
+#[inline]
+pub const fn material_bit(m: MaterialId) -> u64 {
+    1 << (m.0 & 63)
 }
 
 fn uniform_table(material: MaterialId) -> Box<BrickTable> {
@@ -125,6 +136,7 @@ impl Chunk {
             data: ChunkData::Uniform(material),
             dirty_bricks: BrickMask::FULL,
             modified: false,
+            materials: material_bit(material),
         }
     }
 
@@ -134,6 +146,7 @@ impl Chunk {
             data: ChunkData::Bricks(bricks),
             dirty_bricks: BrickMask::FULL,
             modified: false,
+            materials: u64::MAX,
         };
         chunk.compact();
         chunk
@@ -169,6 +182,12 @@ impl Chunk {
 
     pub fn is_modified(&self) -> bool {
         self.modified
+    }
+
+    /// Superset of the materials in the chunk, as a mask of [`material_bit`]s.
+    #[inline]
+    pub fn materials_mask(&self) -> u64 {
+        self.materials
     }
 
     #[inline]
@@ -214,6 +233,7 @@ impl Chunk {
         }
         self.dirty_bricks.set(brick_index);
         self.modified = true;
+        self.materials |= material_bit(material);
         true
     }
 
@@ -231,13 +251,20 @@ impl Chunk {
     }
 
     /// Converts dense bricks whose voxels are all equal to uniform, then the whole
-    /// chunk if all bricks are the same material. Returns `true` if the chunk is
-    /// uniform afterwards. Does not touch the dirty mask.
+    /// chunk if all bricks are the same material, and recomputes the material mask.
+    /// Returns `true` if the chunk is uniform afterwards. Does not touch the dirty
+    /// mask.
     pub fn compact(&mut self) -> bool {
         if let ChunkData::Bricks(bricks) = &mut self.data {
+            let mut mask = 0;
             for brick in bricks.iter_mut() {
                 brick.compact();
+                mask |= match brick {
+                    Brick::Uniform(m) => material_bit(*m),
+                    Brick::Dense(v) => v.iter().fold(0, |acc, &m| acc | material_bit(m)),
+                };
             }
+            self.materials = mask;
             if let Brick::Uniform(first) = bricks[0]
                 && bricks.iter().all(|b| *b == Brick::Uniform(first))
             {
@@ -317,6 +344,33 @@ mod tests {
         assert_eq!(c.as_uniform(), Some(STONE));
         assert!(c.dirty_bricks().is_empty());
         assert!(!c.is_modified());
+    }
+
+    #[test]
+    fn material_mask_is_a_superset_made_exact_by_compact() {
+        let mut c = Chunk::uniform(MaterialId::AIR);
+        assert_eq!(c.materials_mask(), material_bit(MaterialId::AIR));
+        let p = LocalPos::new(3, 4, 5);
+        c.set(p, SAND);
+        assert_eq!(
+            c.materials_mask(),
+            material_bit(MaterialId::AIR) | material_bit(SAND)
+        );
+        c.set(p, MaterialId::AIR);
+        assert_ne!(
+            c.materials_mask() & material_bit(SAND),
+            0,
+            "still a superset"
+        );
+        c.compact();
+        assert_eq!(c.materials_mask(), material_bit(MaterialId::AIR));
+        let generated = Chunk::from_fn(ChunkPos::new(0, 0, 0), |w| {
+            if w.0.y < 10 { STONE } else { MaterialId::AIR }
+        });
+        assert_eq!(
+            generated.materials_mask(),
+            material_bit(STONE) | material_bit(MaterialId::AIR)
+        );
     }
 
     #[test]
