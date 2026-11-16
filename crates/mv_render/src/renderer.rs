@@ -8,6 +8,7 @@ use crate::blit::BlitPass;
 use crate::camera::Camera;
 use crate::context::{GpuContext, SurfaceSize};
 use crate::gpu_volume::{GpuVolume, MaterialGpu, UploadStats, VolumeDesc, VolumeStats};
+use crate::heat::{HeatField, HeatVolume};
 use crate::raymarch::{FrameUniform, RaymarchPass};
 
 /// Per-frame information returned to the caller (for overlays and logs).
@@ -42,6 +43,9 @@ pub struct Renderer {
     volume: GpuVolume,
     raymarch: RaymarchPass,
     blit: BlitPass,
+    heat: HeatVolume,
+    heat_view: bool,
+    ambient: f32,
     sun_dir: Vec3,
     /// Fog: distance where it starts and coefficient k (see `set_view_distance`).
     fog_start: f32,
@@ -50,14 +54,18 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(ctx: GpuContext, volume: &VolumeDesc) -> Self {
+        let heat = HeatVolume::new(&ctx.device, volume.dims, volume.heat_capacity);
         let volume = GpuVolume::new(&ctx.device, volume);
-        let raymarch = RaymarchPass::new(&ctx.device, &volume, ctx.size());
+        let raymarch = RaymarchPass::new(&ctx.device, &volume, &heat, ctx.size());
         let blit = BlitPass::new(&ctx.device, ctx.surface_format(), raymarch.output_view());
         Self {
             ctx,
             volume,
             raymarch,
             blit,
+            heat,
+            heat_view: false,
+            ambient: 20.0,
             sun_dir: Vec3::new(0.45, 0.8, 0.35).normalize(),
             fog_start: 0.0,
             fog_k: 0.0,
@@ -77,7 +85,8 @@ impl Renderer {
             return;
         }
         self.ctx.resize(size);
-        self.raymarch.resize(&self.ctx.device, &self.volume, size);
+        self.raymarch
+            .resize(&self.ctx.device, &self.volume, &self.heat, size);
         self.blit
             .set_source(&self.ctx.device, self.raymarch.output_view());
     }
@@ -93,6 +102,31 @@ impl Renderer {
         self.fog_start = 0.35 * voxels;
         let span = voxels - self.fog_start;
         self.fog_k = if span > 0.0 { 1.9 / span } else { 0.0 };
+    }
+
+    /// Enables the heat-map view. While on, call `upload_heat` each frame.
+    pub fn set_heat_view(&mut self, on: bool) {
+        self.heat_view = on;
+    }
+
+    pub fn heat_view(&self) -> bool {
+        self.heat_view
+    }
+
+    /// Uploads the temperature fields shown by the heat view; chunks without one
+    /// are drawn at `ambient`.
+    pub fn upload_heat<'a>(
+        &mut self,
+        ambient: f32,
+        fields: impl Iterator<Item = (ChunkPos, &'a HeatField)>,
+    ) {
+        self.ambient = ambient;
+        self.heat.upload(
+            &self.ctx.queue,
+            self.volume.origin(),
+            self.volume.dims(),
+            fields,
+        );
     }
 
     /// Moves the rendered window of chunks so its minimum corner is `origin`.
@@ -187,8 +221,8 @@ impl Renderer {
             ],
             sun_dir: v4(self.sun_dir),
             brush,
-            fog: [self.fog_k, self.fog_start, 0.0, 0.0],
-            volume_dims: [dims.x, dims.y, dims.z, 0],
+            fog: [self.fog_k, self.fog_start, self.ambient, 0.0],
+            volume_dims: [dims.x, dims.y, dims.z, u32::from(self.heat_view)],
         }
     }
 }

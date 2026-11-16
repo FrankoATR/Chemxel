@@ -4,8 +4,9 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::context::SurfaceSize;
 use crate::gpu_volume::GpuVolume;
+use crate::heat::HeatVolume;
 
-const SHADER: &str = include_str!("../../../assets/shaders/raymarch.wgsl");
+pub(crate) const SHADER: &str = include_str!("../../../assets/shaders/raymarch.wgsl");
 const WORKGROUP: u32 = 8;
 /// HDR intermediate format; also readable by the blit pass.
 pub(crate) const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -23,8 +24,10 @@ pub(crate) struct FrameUniform {
     pub sun_dir: [f32; 4],
     /// xyz: brush centre relative to the volume origin, w: radius (<= 0: no brush).
     pub brush: [f32; 4],
-    /// x: fog coefficient k, y: fog start distance s, in `1 - exp(-((t - s) * k)^2)`.
+    /// x: fog coefficient k, y: fog start distance s, in `1 - exp(-((t - s) * k)^2)`;
+    /// z: ambient temperature (°C) for the heat view.
     pub fog: [f32; 4],
+    /// xyz: window size in chunks; w: flags (bit 0: heat view).
     pub volume_dims: [u32; 4],
 }
 
@@ -39,7 +42,12 @@ pub(crate) struct RaymarchPass {
 }
 
 impl RaymarchPass {
-    pub fn new(device: &wgpu::Device, volume: &GpuVolume, size: SurfaceSize) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        volume: &GpuVolume,
+        heat: &HeatVolume,
+        size: SurfaceSize,
+    ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raymarch.wgsl"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -72,6 +80,8 @@ impl RaymarchPass {
                 storage(2),
                 storage(3),
                 storage(4),
+                storage(6),
+                storage(7),
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -105,7 +115,7 @@ impl RaymarchPass {
         });
 
         let output_view = create_output(device, size);
-        let bind_group = create_bind_group(device, &layout, &uniform, volume, &output_view);
+        let bind_group = create_bind_group(device, &layout, &uniform, volume, heat, &output_view);
         Self {
             pipeline,
             layout,
@@ -116,7 +126,13 @@ impl RaymarchPass {
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, volume: &GpuVolume, size: SurfaceSize) {
+    pub fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        volume: &GpuVolume,
+        heat: &HeatVolume,
+        size: SurfaceSize,
+    ) {
         if size == self.size || size.is_empty() {
             return;
         }
@@ -127,6 +143,7 @@ impl RaymarchPass {
             &self.layout,
             &self.uniform,
             volume,
+            heat,
             &self.output_view,
         );
     }
@@ -180,9 +197,11 @@ fn create_bind_group(
     layout: &wgpu::BindGroupLayout,
     uniform: &wgpu::Buffer,
     volume: &GpuVolume,
+    heat: &HeatVolume,
     output: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let [grid, bricks, pool, materials] = volume.buffers();
+    let [heat_index, heat_pool] = heat.buffers();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("raymarch"),
         layout,
@@ -210,6 +229,14 @@ fn create_bind_group(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: wgpu::BindingResource::TextureView(output),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: heat_index.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: heat_pool.as_entire_binding(),
             },
         ],
     })

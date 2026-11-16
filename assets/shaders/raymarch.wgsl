@@ -27,8 +27,8 @@ struct Frame {
     projection: vec4<f32>,
     sun_dir: vec4<f32>,     // xyz: direction towards the sun (normalised)
     brush: vec4<f32>,       // xyz: brush centre (volume-relative), w: radius (<= 0: none)
-    fog: vec4<f32>,         // x: k, y: start s in 1 - exp(-((t - s) * k)^2)
-    volume_dims: vec4<u32>, // xyz: volume size in chunks
+    fog: vec4<f32>,         // x: k, y: start s in 1 - exp(-((t - s) * k)^2), z: ambient °C
+    volume_dims: vec4<u32>, // xyz: volume size in chunks, w: flags (bit 0: heat view)
 };
 
 struct Material {
@@ -50,6 +50,10 @@ struct Hit {
 @group(0) @binding(3) var<storage, read> brick_pool: array<u32>;
 @group(0) @binding(4) var<storage, read> materials: array<Material>;
 @group(0) @binding(5) var output: texture_storage_2d<rgba16float, write>;
+// Heat view: chunk cell of the window -> field slot (or EMPTY = ambient); fields of
+// 16³ temperature cells (4³ voxels each), x-fastest.
+@group(0) @binding(6) var<storage, read> heat_index: array<u32>;
+@group(0) @binding(7) var<storage, read> heat_pool: array<f32>;
 
 fn no_hit() -> Hit {
     return Hit(false, 0.0, 0u, 0, vec3<i32>(0));
@@ -209,6 +213,32 @@ fn hash3(p: vec3<i32>) -> f32 {
     return f32(h & 0xffffu) / 65535.0;
 }
 
+fn temperature_at(v: vec3<i32>) -> f32 {
+    let dims = vec3<i32>(frame.volume_dims.xyz);
+    let c = v / CHUNK;
+    let slot = heat_index[c.x + c.y * dims.x + c.z * dims.x * dims.y];
+    if slot == EMPTY {
+        return frame.fog.z;
+    }
+    let l = (v - c * CHUNK) / 4;
+    return heat_pool[slot * 4096u + u32(l.x + l.y * 16 + l.z * 256)];
+}
+
+// Debug colour ramp: blue (cold) - grey (ambient) - yellow (100 °C) - orange - white.
+fn heat_color(t: f32, ambient: f32) -> vec3<f32> {
+    if t < ambient {
+        let k = clamp((ambient - t) / (ambient + 20.0), 0.0, 1.0);
+        return mix(vec3<f32>(0.25), vec3<f32>(0.05, 0.25, 1.0), k);
+    }
+    if t < 100.0 {
+        return mix(vec3<f32>(0.25), vec3<f32>(1.0, 0.85, 0.1), (t - ambient) / (100.0 - ambient));
+    }
+    if t < 600.0 {
+        return mix(vec3<f32>(1.0, 0.85, 0.1), vec3<f32>(1.0, 0.3, 0.02), (t - 100.0) / 500.0);
+    }
+    return mix(vec3<f32>(1.0, 0.3, 0.02), vec3<f32>(1.0), clamp((t - 600.0) / 900.0, 0.0, 1.0));
+}
+
 fn sky(rd: vec3<f32>) -> vec3<f32> {
     let horizon = vec3<f32>(0.62, 0.74, 0.88);
     let zenith = vec3<f32>(0.18, 0.36, 0.72);
@@ -247,6 +277,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let variation = 0.9 + 0.1 * hash3(hit.voxel);
         let base = mat.color.rgb * variation;
         color = base * (0.35 * face_ambient + 0.75 * diffuse) + base * mat.params.x * 0.6;
+
+        if (frame.volume_dims.w & 1u) != 0u {
+            let heat = heat_color(temperature_at(hit.voxel), frame.fog.z);
+            color = heat * (0.55 + 0.45 * face_ambient) * 2.0;
+        }
 
         // Brush preview: tint voxels inside the brush sphere.
         if frame.brush.w > 0.0 {

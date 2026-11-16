@@ -79,6 +79,8 @@ pub struct VolumeDesc {
     pub chunk_capacity: u32,
     /// Bricks the pool can hold (1 KiB each).
     pub brick_capacity: u32,
+    /// Temperature fields the heat view can show (16 KiB each).
+    pub heat_capacity: u32,
 }
 
 /// Counters from uploads, for the debug overlay and budgets.

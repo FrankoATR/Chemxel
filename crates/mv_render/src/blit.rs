@@ -1,6 +1,6 @@
 //! Fullscreen pass that tonemaps the HDR raymarch output onto the swapchain.
 
-const SHADER: &str = include_str!("../../../assets/shaders/blit.wgsl");
+pub(crate) const SHADER: &str = include_str!("../../../assets/shaders/blit.wgsl");
 
 #[derive(Debug)]
 pub(crate) struct BlitPass {

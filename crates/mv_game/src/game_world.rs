@@ -69,6 +69,7 @@ impl GameWorld {
             dims: UVec3::new(h, r.render_height_chunks * 2 + 1, h),
             chunk_capacity: r.chunk_slot_capacity,
             brick_capacity: r.brick_pool_capacity,
+            heat_capacity: r.heat_view_capacity,
         }
     }
 
