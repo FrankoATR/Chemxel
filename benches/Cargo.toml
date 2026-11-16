@@ -17,6 +17,7 @@ bench = false
 mv_core.workspace = true
 mv_world.workspace = true
 criterion.workspace = true
+glam.workspace = true
 
 [[bench]]
 name = "coords"
@@ -24,6 +25,10 @@ harness = false
 
 [[bench]]
 name = "chunk"
+harness = false
+
+[[bench]]
+name = "world"
 harness = false
 
 [lints]
