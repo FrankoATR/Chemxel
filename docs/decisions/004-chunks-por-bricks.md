@@ -49,4 +49,7 @@ enum Brick     { Uniform(MaterialId), Dense(Box<[MaterialId; 512]>) }
 
 - `get`/`set` hacen un salto extra (tabla → brick). La simulación del hito 3 debería
   trabajar brick a brick para aprovechar la localidad.
-- Las mediciones del hito 2 están en PROMPT.md §12.
+- Medición (hito 2, radio 16/8): 14 586 chunks cargados, de los cuales 13 324 son
+  uniformes, y 125 312 bricks densos. En total ocupan **132 MiB** de CPU. Los 1 262 chunks
+  no uniformes ocuparían ~630 MiB como arrays densos. Calcular la ocupación de bricks de un
+  chunk pasó de 31 µs a 1 µs.

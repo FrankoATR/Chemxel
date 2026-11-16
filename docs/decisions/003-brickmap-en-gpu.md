@@ -32,7 +32,7 @@ subida incremental) sin rehacerlas.
    (`mv_world` reexporta `MaterialId`).
 6. **DDA de dos niveles** (bricks 8³ → vóxeles). El salto de chunks vacíos queda implícito
    en la búsqueda `chunk_grid` (entrada `EMPTY` ⇒ brick vacío); un tercer nivel explícito
-   se añadirá si las mediciones del hito 2 lo justifican.
+   se añadirá si las mediciones del hito 2 lo justifican. *(Hito 2: añadido, ver ADR 005.)*
 7. **Cámara en `f64`, GPU en coordenadas relativas.** La posición se guarda como `DVec3` en
    microvóxeles y se resta el origen del volumen en `f64` antes de pasarla a `f32`, así la
    precisión no se degrada lejos del origen. Los rayos se generan con la base
@@ -47,6 +47,7 @@ subida incremental) sin rehacerlas.
 - Hito 2 solo necesita: un volumen de N³ chunks que se desplace con la cámara, subir
   chunks nuevos, liberar los que salen y un presupuesto de bytes por frame.
 - Un chunk uniforme no vacío (todo piedra) ocupa hoy 512 bricks; si eso pesa en memoria,
-  se marcará como uniforme directamente en `chunk_grid`.
+  se marcará como uniforme directamente en `chunk_grid`. *(Hito 2: hecho para chunks y
+  bricks, con la codificación `UNIFORM_BIT | material`; ver ADR 005.)*
 - Medición de referencia (hito 1, RTX 5060 Laptop, 1 chunk, 1920×1080, sin vsync):
   ~3 600 FPS (0,28 ms/frame).

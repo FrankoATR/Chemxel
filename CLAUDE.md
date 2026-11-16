@@ -18,6 +18,7 @@ cargo bench -p mv_benches
 ./scripts/ci.sh                     # o .\scripts\ci.ps1 — fmt + clippy -D warnings + tests
 cargo run --profile profiling -p mv_game --features profile   # con Tracy
 RUST_LOG=chemxel=debug,mv_sim=trace cargo run --release       # logs (target del bin = `chemxel`)
+cargo run --release -- --bench-fly[=SECS]   # benchmark de streaming en el juego (vsync: false)
 ```
 
 En este equipo Windows `cargo` está en `~/.cargo/bin` (puede no estar en el `PATH` del shell
@@ -29,11 +30,12 @@ Bash de la herramienta: `export PATH="$HOME/.cargo/bin:$PATH"`).
 crates/
   mv_core       coords (WorldPos/ChunkPos/LocalPos), constantes, FixedTimestep, Config, paths
   mv_materials  registro de materiales (RON); reacciones en hito 5
-  mv_world      Chunk 64³ (uniforme/denso), BrickMask, testgen; streaming en hito 2
+  mv_world      Chunk 64³ por bricks, World (+colas), terrain, stream, raycast, edit, testgen
   mv_sim        simulación headless: autómata, temperatura, reacciones  (hito 3+)
   mv_physics    puente rapier3d                                          (hito 6)
-  mv_render     wgpu: GpuContext, Camera, GpuVolume (brickmap), raymarch + blit
-  mv_game       binario: App (loop), FlyController, InputState, Scene; egui en hito 2
+  mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
+  mv_game       binario: App (loop), GameWorld (streaming+subida), Editor, Gui/overlay egui,
+                FlyController, InputState, BenchFly
 benches/        paquete mv_benches (Criterion)
 assets/         config.ron, materials/*.ron, reactions/*.ron, shaders/*.wgsl
 docs/decisions/ ADRs (NNN-titulo.md)
@@ -50,20 +52,60 @@ la regla es cero warnings). Al añadir una, descomentarla también en
 
 ### Loop principal (`mv_game/src/app.rs`)
 
-Cada frame: `FrameTimer::tick` → `FixedTimestep::advance(dt)` devuelve N ticks →
-`Simulation::step()` N veces → `Renderer::render()`. El render nunca muta la simulación.
-El `FixedTimestep` limita los ticks por frame y descarta el atraso (evita la espiral de muerte).
+Cada frame:
+1. `FrameTimer::tick`.
+2. `FixedTimestep::advance(dt)` devuelve N ticks, y se llama `Simulation::step()` N veces.
+3. Cámara.
+4. `Editor::update`: picking y pincel.
+5. `GameWorld::update`: streaming y subida a GPU.
+6. UI egui.
+7. `Renderer::render(camera, brush, overlay)`.
 
-### Render (`mv_render`, ADR 003)
+El render nunca muta la simulación. El `FixedTimestep` limita los ticks por frame y
+descarta el atraso (evita la espiral de muerte).
 
-`Renderer::render(&Camera)`: `GpuVolume::flush` → compute `raymarch.wgsl` (DDA bricks 8³ →
-vóxeles, salida HDR `rgba16float`) → `blit.wgsl` (tonemap ACES) → swapchain sRGB.
-Datos GPU: `chunk_grid` (celda → slot de chunk) → `chunk_bricks` (512 por chunk → slot de
-brick) → `brick_pool` (512 × `u16` por brick, 2 por `u32`). `EMPTY = u32::MAX`.
-Subida incremental: `Renderer::upload_chunk` solo sube los bricks de `Chunk::take_dirty_bricks`.
-La cámara guarda la posición en `f64` (microvóxeles); la GPU recibe coordenadas relativas
-al origen del volumen. Si cambias un struct compartido con WGSL (`FrameUniform`,
-`MaterialGpu`), cambia también el shader.
+### Mundo (`mv_world`, ADR 004 y 005)
+
+- **`Chunk`:** `Uniform(m)` o una tabla de 512 `Brick`, cada uno `Uniform(m)` o
+  `Dense(Box<[MaterialId; 512]>)`.
+  - `set` densifica solo el brick tocado; `compact` revierte.
+  - `modified` indica si cambió desde que se generó.
+- **`World`:** `HashMap<ChunkPos, Chunk>` más colas `loaded` (streaming), `edited` y
+  `unloaded`. Quien consume (la subida a GPU) las vacía cada frame.
+  - Para escribir vóxeles: `World::set_voxel`, o `chunk_mut` + `mark_edited`.
+- **`terrain::TerrainGenerator`:** determinista por seed. Alturas por columna en caché y
+  clasificación rápida de chunks/bricks uniformes. Un test compara contra la evaluación
+  vóxel a vóxel.
+- **`stream::Streamer`:** cilindro alrededor de la cámara, generación en rayon, resultados
+  insertados en el hilo principal. Los chunks modificados que se descargan van a un stash.
+- **`raycast`:** DDA en `f64`. **`edit::fill_sphere`:** edita chunk a chunk.
+
+### Render (`mv_render`, ADR 003 y 005)
+
+**Pipeline:** `Renderer::render(&Camera, Option<BrushPreview>, overlay)`:
+1. `GpuVolume::flush`.
+2. Compute `raymarch.wgsl`: DDA de 3 niveles chunk → brick 8³ → vóxel, salida HDR
+   `rgba16float`.
+3. `blit.wgsl`: tonemap ACES a la swapchain sRGB.
+4. Closure de overlay (egui) sobre una vista no sRGB de la swapchain.
+
+**Datos GPU:**
+- `chunk_grid`: ventana de chunks que sigue a la cámara (`set_volume_origin`).
+- `chunk_bricks`: 512 entradas por slot de chunk.
+- `brick_pool`: 512 × `u16` por brick, 2 por `u32`.
+- Codificación de entradas: `EMPTY = u32::MAX` (aire), `UNIFORM_BIT | material`, o un
+  slot.
+- Los chunks son *residentes* con independencia de la ventana.
+
+**Subida:**
+- `upload_chunk` sube los bricks sucios; con slot nuevo sube los 512.
+- `remove_chunk` libera.
+- `GameWorld` prioriza: descargas → ediciones (sin presupuesto) → cargas (con
+  `upload_budget_kib`).
+
+**Precisión y structs compartidos:** la cámara guarda la posición en `f64`
+(microvóxeles); la GPU recibe coordenadas relativas al origen de la ventana. Si cambias un
+struct compartido con WGSL (`FrameUniform`, `MaterialGpu`), cambia también el shader.
 
 ### Materiales (`mv_materials`)
 
@@ -72,7 +114,10 @@ al origen del volumen. Si cambias un struct compartido con WGSL (`FrameUniform`,
 
 ### Convenciones de datos
 
-- Índice lineal en chunk: `x + y*64 + z*64²` (`LocalPos::index`). Iterar `z` fuera, `x` dentro.
+- Todos los índices son x-rápido. Almacenamiento del chunk: `LocalPos::brick_index`
+  (brick dentro del chunk) + `LocalPos::brick_local_index` (vóxel dentro del brick).
+  `LocalPos::index` (`x + y*64 + z*64²`) es el índice plano del chunk entero. Iterar `z`
+  fuera, `x` dentro.
 - Conversión mundo↔chunk por shifts/máscaras (`>> 6`, `& 63`); correcta con negativos.
 - Constantes de escala en `mv_core::consts`. Constantes de tuning en `assets/config.ron`
   (nunca hardcodear tick rate, radios, presupuestos).
@@ -94,7 +139,7 @@ al origen del volumen. Si cambias un struct compartido con WGSL (`FrameUniform`,
   los presupuestos, documentada en `docs/decisions/NNN-titulo.md`.
 - Si algo de PROMPT.md resulta inviable: parar, medir, explicar y proponer alternativas.
 - Al cerrar un hito: actualizar la tabla "Estado del proyecto" de PROMPT.md y el README,
-  con métricas (FPS, ms/tick, benchmarks).
+  con métricas (FPS, ms/tick, benchmarks; `--bench-fly` para el frame time real).
 
 ## Git
 

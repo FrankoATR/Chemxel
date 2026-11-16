@@ -17,7 +17,7 @@ Minecraft (mundo por chunks, construcción).
 |---|---|
 | 0 — Esqueleto | ✅ Completado |
 | 1 — Chunk raymarcheado | ✅ Completado |
-| 2 — Mundo y edición | ⬜ Pendiente |
+| 2 — Mundo y edición | ✅ Completado |
 | 3 — Autómata celular | ⬜ Pendiente |
 | 4 — Temperatura | ⬜ Pendiente |
 | 5 — Reacciones y fuego | ⬜ Pendiente |
@@ -25,10 +25,16 @@ Minecraft (mundo por chunks, construcción).
 | 7 — Iluminación | ⬜ Pendiente |
 | 8 — Jugador y guardado | ⬜ Pendiente |
 
-Hoy el juego muestra un chunk de prueba (terreno sinusoidal con agua, una esfera de arena y
-otra de lava) renderizado por raymarching en GPU, con cámara libre. La simulación corre a
-30 Hz fijos, desacoplada del render. El detalle y las métricas de cada hito
-están en la sección "Estado del proyecto" de [PROMPT.md](PROMPT.md#12-estado-del-proyecto).
+Hoy el juego genera un mundo procedural infinito (colinas, montañas, playas y mar) que se
+carga y descarga alrededor de la cámara en segundo plano, con 16 chunks (64 m) de distancia
+de render. Se puede excavar y construir con un pincel esférico en tiempo real, y un overlay
+de depuración (F3) muestra rendimiento, memoria y herramientas. El render es raymarching en
+GPU sobre brickmaps. La simulación corre a 30 Hz fijos, desacoplada del render (las reglas
+físicas llegan en el hito 3).
+
+Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~700 FPS volando a 20 m/s sobre el
+terreno, sin frames por encima de 16,7 ms. El detalle y las métricas de cada hito están en
+la sección "Estado del proyecto" de [PROMPT.md](PROMPT.md#12-estado-del-proyecto).
 
 ## Requisitos
 
@@ -55,28 +61,45 @@ Profiling con [Tracy](https://github.com/wolfpld/tracy):
 cargo run --profile profiling -p mv_game --features profile
 ```
 
+Benchmark de streaming en el juego real (espera a que cargue el mundo, vuela en línea recta
+y escribe en el log percentiles de tiempo de frame y memoria; usar con `vsync: false`):
+
+```bash
+cargo run --release -- --bench-fly        # 20 s; --bench-fly=60 para 60 s
+```
+
 Logs: variable `RUST_LOG`, p. ej. `RUST_LOG=chemxel=debug cargo run --release`.
 Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 
 ## Configuración
 
-`assets/config.ron` contiene los parámetros ajustables (ventana, vsync, tick rate, semilla,
-distancia de render, campo de visión, memoria del brick pool, velocidad de la cámara y
-sensibilidad del ratón). Todos los campos son opcionales. Para medir FPS reales, pon
+`assets/config.ron` contiene los parámetros ajustables. Todos los campos son opcionales:
+
+- **Ventana:** tamaño, título.
+- **Render:** vsync, distancia horizontal y vertical, memoria del brick pool, slots de
+  chunk, presupuesto de subida por frame, campo de visión.
+- **Mundo:** semilla, nivel del mar, forma del terreno, margen de descarga, trabajos de
+  generación en paralelo.
+- **Controles:** velocidad de la cámara, sensibilidad del ratón.
+- **Pincel:** radio inicial y máximo, alcance, repeticiones por segundo. Para medir FPS reales, pon
 `vsync: false`. Para usar otra carpeta de assets: variable de entorno `CHEMXEL_ASSETS_DIR`.
 
 ## Controles
 
 | Tecla | Acción |
 |---|---|
-| `Click izq.` | Capturar el ratón (mirar con el ratón) |
+| `Click izq.` (ratón suelto) | Capturar el ratón (mirar con el ratón) |
 | `WASD` | Moverse |
 | `Espacio` / `Ctrl izq.` | Subir / bajar |
 | `Shift` | Más rápido |
+| `Click izq.` (mantener) | Quitar material (pincel esférico) |
+| `Click der.` (mantener) | Poner el material seleccionado (no pisa sólidos ni polvos) |
+| `Rueda` | Radio del pincel |
+| `1`–`9` | Material (también desde el overlay, con el ratón suelto) |
+| `F3` | Mostrar/ocultar el overlay de depuración |
 | `Esc` | Soltar el ratón; si ya está suelto, salir |
 
-Controles previstos (hitos siguientes): `Click izq./der.` quitar/poner · `Rueda` radio del
-pincel · `1–9` material · `F3` overlay de depuración · `F5` vista de temperatura.
+Previsto: `F5` vista de temperatura (hito 4).
 
 ## Estructura
 
@@ -84,11 +107,11 @@ pincel · `1–9` material · `F3` overlay de depuración · `F5` vista de tempe
 crates/
   mv_core       tipos base: coordenadas, constantes, timestep fijo, configuración
   mv_materials  materiales y reacciones (RON)
-  mv_world      chunks, almacenamiento, generación procedural
+  mv_world      chunks por bricks, mundo, terreno procedural, streaming, picking, edición
   mv_sim        simulación (autómata celular, temperatura, reacciones) — sin render
   mv_physics    cuerpos rígidos (rapier3d)
   mv_render     render con wgpu (brickmaps + raymarching)
-  mv_game       binario del juego
+  mv_game       binario del juego: loop, cámara, editor, overlay egui
 benches/        benchmarks
 assets/         configuración, materiales, reacciones, shaders
 docs/decisions/ registro de decisiones de arquitectura (ADR)
