@@ -39,5 +39,10 @@ harness = false
 name = "sim_drop"
 harness = false
 
+# Milestone 4: lava on ice, report ms/tick of the thermal simulation.
+[[bench]]
+name = "sim_thermal"
+harness = false
+
 [lints]
 workspace = true
