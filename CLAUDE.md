@@ -19,6 +19,8 @@ cargo bench -p mv_benches
 cargo run --profile profiling -p mv_game --features profile   # con Tracy
 RUST_LOG=chemxel=debug,mv_sim=trace cargo run --release       # logs (target del bin = `chemxel`)
 cargo run --release -- --bench-fly[=SECS]   # benchmark de streaming en el juego (vsync: false)
+cargo run --release -- --bench-drop[=SECS]  # 100k vóxeles soltados, ms/tick de la simulación
+cargo bench -p mv_benches --bench sim_drop  # aceptación del autómata, sin ventana
 ```
 
 En este equipo Windows `cargo` está en `~/.cargo/bin` (puede no estar en el `PATH` del shell
@@ -31,7 +33,7 @@ crates/
   mv_core       coords (WorldPos/ChunkPos/LocalPos), constantes, FixedTimestep, Config, paths
   mv_materials  registro de materiales (RON); reacciones en hito 5
   mv_world      Chunk 64³ por bricks, World (+colas), terrain, stream, raycast, edit, testgen
-  mv_sim        simulación headless: autómata, temperatura, reacciones  (hito 3+)
+  mv_sim        simulación headless: autómata (hito 3); temperatura, reacciones (4–5)
   mv_physics    puente rapier3d                                          (hito 6)
   mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
   mv_game       binario: App (loop), GameWorld (streaming+subida), Editor, Gui/overlay egui,
@@ -56,8 +58,9 @@ Cada frame:
 1. `FrameTimer::tick`.
 2. `FixedTimestep::advance(dt)` devuelve N ticks, y se llama `Simulation::step()` N veces.
 3. Cámara.
-4. `Editor::update`: picking y pincel.
-5. `GameWorld::update`: streaming y subida a GPU.
+4. `Editor::update`: picking y pincel. Devuelve la caja editada → `Simulation::wake_box`.
+5. `GameWorld::update`: streaming y subida a GPU (incluidos los chunks que tocó la
+   simulación).
 6. UI egui.
 7. `Renderer::render(camera, brush, overlay)`.
 
@@ -79,6 +82,32 @@ descarta el atraso (evita la espiral de muerte).
 - **`stream::Streamer`:** cilindro alrededor de la cámara, generación en rayon, resultados
   insertados en el hilo principal. Los chunks modificados que se descargan van a un stash.
 - **`raycast`:** DDA en `f64`. **`edit::fill_sphere`:** edita chunk a chunk.
+
+### Simulación (`mv_sim`, ADR 006)
+
+**Estado:** `Simulation::step(&mut World)` avanza un tick. Solo se procesan los chunks
+activos (`HashMap<ChunkPos, ActiveChunk>`), y dentro de cada uno solo su región sucia:
+- cada celda que cambia añade su entorno ±1 a la región pendiente de cada chunk que toca,
+  incluidos los vecinos, que así se despiertan;
+- un chunk se duerme tras `sleep_after_ticks` ticks sin cambios;
+- las ediciones del jugador despiertan con `wake_box`.
+
+**Fases en paralelo:** 8 fases por paridad 2×2×2. En cada una:
+1. Se sacan sus chunks con `World::detach`.
+2. Se procesan en rayon con `automaton::View`: el chunk propio en mutable y los 26
+   vecinos en solo lectura.
+3. Se devuelven con `World::attach`.
+4. Se aplican en serie los `Move` entre chunks, validados.
+
+Nada de `unsafe`.
+
+**Reglas** (`automaton.rs`): todo movimiento es un intercambio ordenado por densidad
+(`Sweep::enterable`); el barrido va de abajo arriba y alterna el sentido en x y z.
+Aleatoriedad: `rng::hash(seed, tick, pos)`, sin estado. Los cambios marcan los chunks
+como editados en `World`, y así se suben a la GPU.
+
+**Tests:** `mv_sim/src/tests.rs` (mundo de 3×3×3 chunks con suelo de piedra). Toda regla
+nueva lleva un test ahí.
 
 ### Render (`mv_render`, ADR 003 y 005)
 
