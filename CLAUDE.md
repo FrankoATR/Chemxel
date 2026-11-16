@@ -21,6 +21,8 @@ RUST_LOG=chemxel=debug,mv_sim=trace cargo run --release       # logs (target del
 cargo run --release -- --bench-fly[=SECS]   # benchmark de streaming en el juego (vsync: false)
 cargo run --release -- --bench-drop[=SECS]  # 100k vóxeles soltados, ms/tick de la simulación
 cargo bench -p mv_benches --bench sim_drop  # aceptación del autómata, sin ventana
+cargo bench -p mv_benches --bench sim_thermal  # lava sobre hielo, sin ventana
+cargo run --release -- --bench-heat[=SECS]  # lo mismo en el juego, con la vista F5
 ```
 
 En este equipo Windows `cargo` está en `~/.cargo/bin` (puede no estar en el `PATH` del shell
@@ -33,7 +35,7 @@ crates/
   mv_core       coords (WorldPos/ChunkPos/LocalPos), constantes, FixedTimestep, Config, paths
   mv_materials  registro de materiales (RON); reacciones en hito 5
   mv_world      Chunk 64³ por bricks, World (+colas), terrain, stream, raycast, edit, testgen
-  mv_sim        simulación headless: autómata (hito 3); temperatura, reacciones (4–5)
+  mv_sim        simulación headless: autómata (3), temperatura (4); reacciones (5)
   mv_physics    puente rapier3d                                          (hito 6)
   mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
   mv_game       binario: App (loop), GameWorld (streaming+subida), Editor, Gui/overlay egui,
@@ -58,7 +60,7 @@ Cada frame:
 1. `FrameTimer::tick`.
 2. `FixedTimestep::advance(dt)` devuelve N ticks, y se llama `Simulation::step()` N veces.
 3. Cámara.
-4. `Editor::update`: picking y pincel. Devuelve la caja editada → `Simulation::wake_box`.
+4. `Editor::update`: picking y pincel. Devuelve un `Edit` → `Simulation::edited`.
 5. `GameWorld::update`: streaming y subida a GPU (incluidos los chunks que tocó la
    simulación).
 6. UI egui.
@@ -106,8 +108,30 @@ Nada de `unsafe`.
 Aleatoriedad: `rng::hash(seed, tick, pos)`, sin estado. Los cambios marcan los chunks
 como editados en `World`, y así se suben a la GPU.
 
-**Tests:** `mv_sim/src/tests.rs` (mundo de 3×3×3 chunks con suelo de piedra). Toda regla
-nueva lleva un test ahí.
+**Temperatura (`thermal.rs`, ADR 007):**
+- **Campo:** cada chunk apartado del ambiente tiene un `ThermalChunk` (16³ celdas de 4³
+  con T, capacidad y conductividad).
+- **Pase térmico** (`thermal_step`, tras el autómata):
+  1. difusión Jacobi en paralelo;
+  2. crecimiento a vecinos y sueño;
+  3. transiciones por vóxel con histéresis, probabilidad y calor latente.
+- **Advección:** `Sweep::swap` y `apply_move` mueven la energía con los vóxeles.
+- **Ediciones:** `Simulation::edited(min, max, placed)` da la `base_temperature` al
+  material colocado.
+- **Energía:** la que no se conserva a propósito (cambios de fase a volumen constante,
+  campos que se duermen) se acumula en `energy_imbalance`.
+
+**Tests:**
+- `mv_sim/src/tests.rs`: reglas del autómata, en un mundo de 3×3×3 chunks con suelo de
+  piedra.
+- `tests_thermal.rs`: temperatura, con los materiales reales de `assets/materials`.
+
+Toda regla nueva lleva un test.
+
+### Shaders
+
+`mv_render` valida `raymarch.wgsl` y `blit.wgsl` con `wgpu::naga` en `cargo test`. Un error
+de shader rompe la CI, no el arranque del juego.
 
 ### Render (`mv_render`, ADR 003 y 005)
 

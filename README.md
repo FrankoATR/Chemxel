@@ -19,7 +19,7 @@ Minecraft (mundo por chunks, construcción).
 | 1 — Chunk raymarcheado | ✅ Completado |
 | 2 — Mundo y edición | ✅ Completado |
 | 3 — Autómata celular | ✅ Completado |
-| 4 — Temperatura | ⬜ Pendiente |
+| 4 — Temperatura | ✅ Completado |
 | 5 — Reacciones y fuego | ⬜ Pendiente |
 | 6 — Integridad y rígidos | ⬜ Pendiente |
 | 7 — Iluminación | ⬜ Pendiente |
@@ -29,8 +29,10 @@ Hoy el juego genera un mundo procedural infinito (colinas, montañas, playas y m
 carga y descarga alrededor de la cámara en segundo plano, con 16 chunks (64 m) de distancia
 de render. Se puede excavar y construir con un pincel esférico en tiempo real, y un overlay
 de depuración (F3) muestra rendimiento, memoria y herramientas. La arena cae y forma
-montículos, el agua fluye y se nivela, los gases suben; solo se simulan las zonas que
-cambian, en paralelo, a 30 Hz fijos y desacoplado del render. El render es raymarching en
+montículos, el agua fluye y se nivela, los gases suben. El calor se difunde y viaja con el
+material: la lava funde el hielo, el agua hierve, el vapor sube y se condensa lejos, y la
+lava se solidifica en piedra al enfriarse (vista de calor con F5). Solo se simulan las
+zonas que cambian, en paralelo, a 30 Hz fijos y desacoplado del render. El render es raymarching en
 GPU sobre brickmaps.
 
 Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~700 FPS volando a 20 m/s sobre el
@@ -67,6 +69,8 @@ Aceptación del autómata (100k vóxeles de arena y agua, ms por tick):
 ```bash
 cargo bench -p mv_benches --bench sim_drop   # sin ventana, en una cuenca de piedra
 cargo run --release -- --bench-drop          # en el juego, sobre el terreno real
+cargo bench -p mv_benches --bench sim_thermal # temperatura: lava sobre hielo, sin ventana
+cargo run --release -- --bench-heat          # lo mismo en el juego, con la vista de calor
 ```
 
 Benchmark de streaming en el juego real (espera a que cargue el mundo, vuela en línea recta
@@ -106,9 +110,9 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 | `1`–`9` | Material (también desde el overlay, con el ratón suelto) |
 | `F3` | Mostrar/ocultar el overlay de depuración (incluye el botón "Drop 100k sand + water") |
 | `P` | Pausar/reanudar la simulación |
+| `F5` | Vista de calor (azul frío · gris ambiente · amarillo 100 °C · naranja · blanco) |
 | `Esc` | Soltar el ratón; si ya está suelto, salir |
 
-Previsto: `F5` vista de temperatura (hito 4).
 
 ## Estructura
 
