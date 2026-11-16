@@ -18,6 +18,9 @@ mv_core.workspace = true
 mv_world.workspace = true
 criterion.workspace = true
 glam.workspace = true
+mv_materials.workspace = true
+mv_sim.workspace = true
+rayon.workspace = true
 
 [[bench]]
 name = "coords"
@@ -29,6 +32,11 @@ harness = false
 
 [[bench]]
 name = "world"
+harness = false
+
+# Milestone 3 acceptance: drop ~100k voxels of sand and water, report ms/tick.
+[[bench]]
+name = "sim_drop"
 harness = false
 
 [lints]
