@@ -1,0 +1,18 @@
+[package]
+name = "mv_render"
+description = "GPU renderer: wgpu context, brickmaps and voxel raymarching."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Deliberately does not depend on winit: the renderer accepts any surface target,
+# so it can be driven by other windowing layers (or none, for offscreen tests).
+[dependencies]
+wgpu.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

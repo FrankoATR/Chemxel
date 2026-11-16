@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "benches"]
+default-members = ["crates/mv_game"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Allowed dependency direction (see CLAUDE.md):
+#   mv_core <- mv_materials <- mv_world <- mv_sim <- mv_physics
+#   mv_render -> mv_core, mv_world        mv_game -> everything
+# An internal crate is listed here only once another crate actually uses it
+# (cargo warns about unused workspace dependencies). Pending:
+#   mv_materials = { path = "crates/mv_materials" }
+#   mv_world = { path = "crates/mv_world" }
+#   mv_physics = { path = "crates/mv_physics" }
+mv_core = { path = "crates/mv_core" }
+mv_sim = { path = "crates/mv_sim" }
+mv_render = { path = "crates/mv_render" }
+
+# External crates. Versions are pinned here so every crate uses the same one.
+# wgpu / winit versions must stay compatible with egui-wgpu / egui-winit.
+wgpu = "30.0.2"
+winit = "0.30.13"
+glam = { version = "0.34.3", features = ["serde", "bytemuck"] }
+serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.12.3"
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+pollster = "1.0.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-tracy = "0.11"
+criterion = "0.8.2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+# Our own code gets light optimization in dev; dependencies get full optimization.
+# The simulation is unusably slow at opt-level 0.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+
+# Release build with symbols, for profiling with Tracy.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"

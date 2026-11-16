@@ -1,0 +1,19 @@
+// Chemxel runtime configuration.
+// Every field is optional; missing fields use the defaults from `mv_core::config`.
+(
+    window: (
+        title: "Chemxel",
+        width: 1600,
+        height: 900,
+    ),
+    sim: (
+        tick_rate_hz: 30.0,
+        max_ticks_per_frame: 4,
+        seed: 12648430,
+    ),
+    render: (
+        vsync: true,
+        render_distance_chunks: 16,
+        clear_color: (0.05, 0.07, 0.12),
+    ),
+)

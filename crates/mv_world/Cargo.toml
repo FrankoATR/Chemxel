@@ -1,0 +1,13 @@
+[package]
+name = "mv_world"
+description = "Chunk storage, palettes, streaming and procedural generation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

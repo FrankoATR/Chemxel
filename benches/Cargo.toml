@@ -1,0 +1,25 @@
+[package]
+name = "mv_benches"
+description = "Criterion benchmarks for the Chemxel workspace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+bench = false
+
+[dependencies]
+
+[dev-dependencies]
+mv_core.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "coords"
+harness = false
+
+[lints]
+workspace = true
