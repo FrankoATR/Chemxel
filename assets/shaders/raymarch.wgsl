@@ -1,4 +1,5 @@
-// Voxel raymarcher: one thread per pixel, hierarchical DDA (Amanatides & Woo).
+// Voxel raymarcher: one thread per pixel, three-level DDA (Amanatides & Woo):
+// chunks (64³) → bricks (8³) → voxels.
 //
 // Data layout (mirrors mv_render::gpu_volume):
 //   chunk_grid[c]                     entry for chunk cell c of the window
@@ -14,7 +15,8 @@ const EMPTY: u32 = 0xffffffffu;
 const UNIFORM_BIT: u32 = 0x80000000u;
 const BRICK: i32 = 8;
 const BRICKS_PER_CHUNK_AXIS: i32 = 8;
-const MAX_BRICK_STEPS: u32 = 1024u;
+const CHUNK: i32 = 64;
+const MAX_CHUNK_STEPS: u32 = 512u;
 
 struct Frame {
     camera_pos: vec4<f32>,  // xyz: eye position relative to the volume origin
@@ -25,7 +27,7 @@ struct Frame {
     projection: vec4<f32>,
     sun_dir: vec4<f32>,     // xyz: direction towards the sun (normalised)
     brush: vec4<f32>,       // xyz: brush centre (volume-relative), w: radius (<= 0: none)
-    fog: vec4<f32>,         // x: k in 1 - exp(-(t*k)^2)
+    fog: vec4<f32>,         // x: k, y: start s in 1 - exp(-((t - s) * k)^2)
     volume_dims: vec4<u32>, // xyz: volume size in chunks
 };
 
@@ -51,18 +53,6 @@ struct Hit {
 
 fn no_hit() -> Hit {
     return Hit(false, 0.0, 0u, 0, vec3<i32>(0));
-}
-
-// Entry for brick g (in bricks, volume-relative): EMPTY, uniform or a pool slot.
-fn brick_entry(g: vec3<i32>) -> u32 {
-    let dims = vec3<i32>(frame.volume_dims.xyz);
-    let c = g / BRICKS_PER_CHUNK_AXIS;
-    let chunk = chunk_grid[c.x + c.y * dims.x + c.z * dims.x * dims.y];
-    if (chunk & UNIFORM_BIT) != 0u {
-        return chunk; // EMPTY also has the bit set
-    }
-    let b = g - c * BRICKS_PER_CHUNK_AXIS;
-    return chunk_bricks[chunk * 512u + u32(b.x + b.y * 8 + b.z * 64)];
 }
 
 fn voxel_material(brick: u32, v: vec3<i32>) -> u32 {
@@ -107,14 +97,58 @@ fn trace_brick(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
     return no_hit();
 }
 
+// Brick-level DDA inside one non-uniform chunk, starting at ray parameter t_start.
+// `cmin` is the chunk's minimum corner in voxels, `slot` its brick table.
+fn trace_chunk(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
+               t_start: f32, t_exit: f32, cmin: vec3<i32>, slot: u32, entry_axis: i32) -> Hit {
+    let gmin = cmin / BRICK;
+    let p = ro + rd * t_start;
+    var b = clamp(vec3<i32>(floor(p / f32(BRICK))) - gmin, vec3<i32>(0),
+                  vec3<i32>(BRICKS_PER_CHUNK_AXIS - 1));
+    let delta = abs(f32(BRICK) * inv);
+    var t_max = ((vec3<f32>(gmin + b) + select(vec3<f32>(0.0), vec3<f32>(1.0), rd > vec3<f32>(0.0)))
+                 * f32(BRICK) - ro) * inv;
+    var axis = entry_axis;
+    var t = t_start;
+    // A ray crosses at most 3 * 8 - 2 bricks of a chunk.
+    for (var i = 0; i < 3 * BRICKS_PER_CHUNK_AXIS; i++) {
+        let entry = chunk_bricks[slot * 512u + u32(b.x + b.y * 8 + b.z * 64)];
+        if entry != EMPTY {
+            let bmin = (gmin + b) * BRICK;
+            if (entry & UNIFORM_BIT) != 0u {
+                // Solid uniform brick: the entry point is the hit.
+                let v = clamp(vec3<i32>(floor(ro + rd * t)), bmin, bmin + vec3<i32>(BRICK - 1));
+                return Hit(true, t, entry & 0xffffu, axis, v);
+            }
+            let hit = trace_brick(ro, rd, inv, step, t, bmin, entry, axis);
+            if hit.found {
+                return hit;
+            }
+        }
+        axis = min_axis(t_max);
+        t = t_max[axis];
+        if t > t_exit {
+            break;
+        }
+        t_max[axis] += delta[axis];
+        b[axis] += step[axis];
+        if b[axis] < 0 || b[axis] >= BRICKS_PER_CHUNK_AXIS {
+            break;
+        }
+    }
+    return no_hit();
+}
+
+// Chunk-level DDA over the window: empty chunks are skipped in one step, uniform
+// chunks hit immediately, the rest descend to bricks and then voxels.
 fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
     // Avoid divisions by zero for axis-aligned rays.
     let eps = 1e-8;
     let rd = select(rd_in, vec3<f32>(eps), abs(rd_in) < vec3<f32>(eps));
     let inv = 1.0 / rd;
 
-    let grid = vec3<i32>(frame.volume_dims.xyz) * BRICKS_PER_CHUNK_AXIS;
-    let bounds = vec3<f32>(grid * BRICK);
+    let dims = vec3<i32>(frame.volume_dims.xyz);
+    let bounds = vec3<f32>(dims * CHUNK);
     let t0 = -ro * inv;
     let t1 = (bounds - ro) * inv;
     let t_near = min(t0, t1);
@@ -135,21 +169,21 @@ fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
 
     let step = vec3<i32>(sign(rd));
     let p = ro + rd * t_enter;
-    var g = clamp(vec3<i32>(floor(p / f32(BRICK))), vec3<i32>(0), grid - 1);
-    let delta = abs(f32(BRICK) * inv);
-    var t_max = ((vec3<f32>(g) + select(vec3<f32>(0.0), vec3<f32>(1.0), rd > vec3<f32>(0.0))) * f32(BRICK) - ro) * inv;
+    var c = clamp(vec3<i32>(floor(p / f32(CHUNK))), vec3<i32>(0), dims - 1);
+    let delta = abs(f32(CHUNK) * inv);
+    var t_max = ((vec3<f32>(c) + select(vec3<f32>(0.0), vec3<f32>(1.0), rd > vec3<f32>(0.0)))
+                 * f32(CHUNK) - ro) * inv;
     var t = t_enter;
 
-    for (var i = 0u; i < MAX_BRICK_STEPS; i++) {
-        let brick = brick_entry(g);
-        if brick != EMPTY {
-            let bmin = g * BRICK;
-            if (brick & UNIFORM_BIT) != 0u {
-                // Solid uniform brick: the entry point is the hit.
-                let v = clamp(vec3<i32>(floor(ro + rd * t)), bmin, bmin + vec3<i32>(BRICK - 1));
-                return Hit(true, t, brick & 0xffffu, axis, v);
+    for (var i = 0u; i < MAX_CHUNK_STEPS; i++) {
+        let entry = chunk_grid[c.x + c.y * dims.x + c.z * dims.x * dims.y];
+        if entry != EMPTY {
+            let cmin = c * CHUNK;
+            if (entry & UNIFORM_BIT) != 0u {
+                let v = clamp(vec3<i32>(floor(ro + rd * t)), cmin, cmin + vec3<i32>(CHUNK - 1));
+                return Hit(true, t, entry & 0xffffu, axis, v);
             }
-            let hit = trace_brick(ro, rd, inv, step, t, bmin, brick, axis);
+            let hit = trace_chunk(ro, rd, inv, step, t, t_exit, cmin, entry, axis);
             if hit.found {
                 return hit;
             }
@@ -160,8 +194,8 @@ fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
             break;
         }
         t_max[axis] += delta[axis];
-        g[axis] += step[axis];
-        if g[axis] < 0 || g[axis] >= grid[axis] {
+        c[axis] += step[axis];
+        if c[axis] < 0 || c[axis] >= dims[axis] {
             break;
         }
     }
@@ -223,7 +257,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
 
         // Distance fog, fully opaque near the edge of the render distance.
-        let ft = hit.t * frame.fog.x;
+        let ft = max(hit.t - frame.fog.y, 0.0) * frame.fog.x;
         color = mix(color, sky(rd), 1.0 - exp(-ft * ft));
     }
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(color, 1.0));

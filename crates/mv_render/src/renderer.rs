@@ -43,6 +43,8 @@ pub struct Renderer {
     raymarch: RaymarchPass,
     blit: BlitPass,
     sun_dir: Vec3,
+    /// Fog: distance where it starts and coefficient k (see `set_view_distance`).
+    fog_start: f32,
     fog_k: f32,
 }
 
@@ -57,6 +59,7 @@ impl Renderer {
             raymarch,
             blit,
             sun_dir: Vec3::new(0.45, 0.8, 0.35).normalize(),
+            fog_start: 0.0,
             fog_k: 0.0,
         }
     }
@@ -83,10 +86,13 @@ impl Renderer {
         self.volume.set_materials(&self.ctx.queue, materials);
     }
 
-    /// Distance in microvoxels at which fog fully hides the scene.
+    /// Distance in microvoxels at which fog fully hides the scene (the edge of the
+    /// loaded world). Fog starts at 35% of it.
     pub fn set_view_distance(&mut self, voxels: f32) {
-        // 1 - exp(-(t*k)^2) reaches ~0.97 at t = distance.
-        self.fog_k = if voxels > 0.0 { 1.9 / voxels } else { 0.0 };
+        // 1 - exp(-((t - start) * k)^2) reaches ~0.97 at t = distance.
+        self.fog_start = 0.35 * voxels;
+        let span = voxels - self.fog_start;
+        self.fog_k = if span > 0.0 { 1.9 / span } else { 0.0 };
     }
 
     /// Moves the rendered window of chunks so its minimum corner is `origin`.
@@ -181,7 +187,7 @@ impl Renderer {
             ],
             sun_dir: v4(self.sun_dir),
             brush,
-            fog: [self.fog_k, 0.0, 0.0, 0.0],
+            fog: [self.fog_k, self.fog_start, 0.0, 0.0],
             volume_dims: [dims.x, dims.y, dims.z, 0],
         }
     }

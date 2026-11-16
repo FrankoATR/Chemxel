@@ -23,7 +23,7 @@ pub(crate) struct FrameUniform {
     pub sun_dir: [f32; 4],
     /// xyz: brush centre relative to the volume origin, w: radius (<= 0: no brush).
     pub brush: [f32; 4],
-    /// x: fog coefficient k in `1 - exp(-(t*k)^2)`.
+    /// x: fog coefficient k, y: fog start distance s, in `1 - exp(-((t - s) * k)^2)`.
     pub fog: [f32; 4],
     pub volume_dims: [u32; 4],
 }
