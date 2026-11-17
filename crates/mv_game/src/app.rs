@@ -279,7 +279,7 @@ impl App {
             if scenario == drop_test::Scenario::ForestFire {
                 // Look at the forest from the side, a bit above the canopies.
                 self.camera.position = ground.0.as_dvec3() + glam::DVec3::new(-110.0, 90.0, -110.0);
-                self.camera.yaw = std::f32::consts::FRAC_PI_4;
+                self.camera.yaw = -3.0 * std::f32::consts::FRAC_PI_4; // towards +x, +z
                 self.camera.pitch = -0.35;
             }
             self.spawn_scenario(ground, scenario);

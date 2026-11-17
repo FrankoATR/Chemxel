@@ -51,8 +51,8 @@
              flame: "fire", flame_rate: 0.25),
     Material(name: "fire",     state: Energy, density: 0.3,  color: (255, 160, 40, 230),  conductivity: 0.05,
              emissive: 6.0, base_temperature: 800, lifetime: (10, 30), decays_into: "smoke"),
-    Material(name: "smoke",    state: Gas,    density: 0.9,  color: (60, 60, 60, 120),    conductivity: 0.02,
-             heat_loss: 0.01, lifetime: (60, 200)),
+    Material(name: "smoke",    state: Gas,    density: 0.9,  color: (105, 105, 110, 120), conductivity: 0.02,
+             heat_loss: 0.01, lifetime: (20, 80)),
     Material(name: "ash",      state: Powder, density: 600,  color: (90, 88, 85, 255),    conductivity: 0.1),
 
     // --- Chemistry ---
