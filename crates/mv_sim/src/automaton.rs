@@ -190,6 +190,12 @@ pub fn process_chunk(
     let flip_x = ctx.tick & 1 == 1;
     let flip_z = ctx.tick & 2 == 2;
     let (lo, hi) = (region.min, region.max);
+    // The 8 voxels of the current row inside the current brick, read once on
+    // entering it so air is skipped without touching the chunk again. The copy may
+    // go stale as voxels move, but only towards "moved this tick" voxels (every
+    // voxel that arrives somewhere not yet visited is marked), which are skipped
+    // anyway.
+    let mut row = [MaterialId::AIR; 8];
     // Bottom-up: falling columns move as a whole in one tick.
     for y in lo.y..=hi.y {
         for iz in 0..=(hi.z - lo.z) {
@@ -199,13 +205,24 @@ pub fn process_chunk(
             while ix < len {
                 let x = if flip_x { hi.x - ix } else { lo.x + ix };
                 let p = IVec3::new(x, y, z);
-                // On entering a brick, skip it whole if nothing in it can move.
                 let entering = ix == 0 || (x & 7) == if flip_x { 7 } else { 0 };
-                if entering && sweep.inert_brick(p) {
-                    ix += if flip_x { (x & 7) + 1 } else { 8 - (x & 7) };
-                    continue;
+                if entering {
+                    // Skip the brick's segment whole if nothing in it can move.
+                    if sweep.inert_brick(p) {
+                        ix += if flip_x { (x & 7) + 1 } else { 8 - (x & 7) };
+                        continue;
+                    }
+                    row = match sweep.view.center.brick(local(p).brick_index()) {
+                        BrickRef::Uniform(m) => [m; 8],
+                        BrickRef::Dense(v) => {
+                            let base = ((y & 7) * 8 + (z & 7) * 64) as usize;
+                            v[base..base + 8].try_into().unwrap_or([MaterialId::AIR; 8])
+                        }
+                    };
                 }
-                sweep.cell(p);
+                if !row[(x & 7) as usize].is_air() {
+                    sweep.cell(p);
+                }
                 ix += 1;
             }
         }
