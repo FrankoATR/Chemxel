@@ -9,7 +9,6 @@ use winit::window::Window;
 #[derive(Default)]
 pub struct GuiFrame {
     primitives: Vec<egui::ClippedPrimitive>,
-    textures: egui::TexturesDelta,
     pixels_per_point: f32,
 }
 
@@ -17,6 +16,10 @@ pub struct Gui {
     ctx: egui::Context,
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
+    /// Texture changes not uploaded yet. They accumulate until a frame is actually
+    /// painted (the renderer may skip frames, e.g. while the surface is not ready),
+    /// so none is lost and egui's "unapplied deltas" check never fires.
+    pending_textures: egui::TexturesDelta,
 }
 
 impl std::fmt::Debug for Gui {
@@ -45,6 +48,7 @@ impl Gui {
             ctx,
             state,
             renderer,
+            pending_textures: egui::TexturesDelta::default(),
         }
     }
 
@@ -64,9 +68,9 @@ impl Gui {
         let output = self.ctx.run_pass(input, ui);
         self.state
             .handle_platform_output(window, output.platform_output);
+        self.pending_textures.append(output.textures_delta);
         GuiFrame {
             primitives: self.ctx.tessellate(output.shapes, output.pixels_per_point),
-            textures: output.textures_delta,
             pixels_per_point: output.pixels_per_point,
         }
     }
@@ -79,7 +83,8 @@ impl Gui {
         target: &OverlayTarget<'_>,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Vec<wgpu::CommandBuffer> {
-        for (id, deltas) in &frame.textures.set {
+        let textures = std::mem::take(&mut self.pending_textures);
+        for (id, deltas) in &textures.set {
             for delta in deltas {
                 self.renderer
                     .update_texture(target.device, target.queue, *id, delta);
@@ -114,9 +119,11 @@ impl Gui {
                 .forget_lifetime();
             self.renderer.render(&mut pass, &frame.primitives, &screen);
         }
-        for id in &frame.textures.free {
+        for id in &textures.free {
             self.renderer.free_texture(id);
         }
+        let mut textures = textures;
+        textures.clear();
         commands
     }
 }
