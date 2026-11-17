@@ -23,7 +23,14 @@ cargo run --release -- --bench-drop[=SECS]  # 100k vóxeles soltados, ms/tick de
 cargo bench -p mv_benches --bench sim_drop  # aceptación del autómata, sin ventana
 cargo bench -p mv_benches --bench sim_thermal  # lava sobre hielo, sin ventana
 cargo run --release -- --bench-heat[=SECS]  # lo mismo en el juego, con la vista F5
+cargo bench -p mv_benches --bench sim_fire  # incendio de un bosque, sin ventana
+cargo run --release -- --bench-fire[=SECS]  # lo mismo en el juego
+cargo run --release -- --hot-reload         # recarga de RON también en release
 ```
+
+Benchmarks siempre con el portátil enchufado: con batería los tiempos se multiplican
+×2–2,5. Los benchmarks del juego abren una ventana; si el usuario la mueve o toca, la
+medición no vale.
 
 En este equipo Windows `cargo` está en `~/.cargo/bin` (puede no estar en el `PATH` del shell
 Bash de la herramienta: `export PATH="$HOME/.cargo/bin:$PATH"`).
@@ -33,9 +40,9 @@ Bash de la herramienta: `export PATH="$HOME/.cargo/bin:$PATH"`).
 ```
 crates/
   mv_core       coords (WorldPos/ChunkPos/LocalPos), constantes, FixedTimestep, Config, paths
-  mv_materials  registro de materiales (RON); reacciones en hito 5
+  mv_materials  registro de materiales y reacciones (RON)
   mv_world      Chunk 64³ por bricks, World (+colas), terrain, stream, raycast, edit, testgen
-  mv_sim        simulación headless: autómata (3), temperatura (4); reacciones (5)
+  mv_sim        simulación headless: autómata (3), temperatura (4), reacciones y fuego (5)
   mv_physics    puente rapier3d                                          (hito 6)
   mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
   mv_game       binario: App (loop), GameWorld (streaming+subida), Editor, Gui/overlay egui,
@@ -121,10 +128,25 @@ como editados en `World`, y así se suben a la GPU.
 - **Energía:** la que no se conserva a propósito (cambios de fase a volumen constante,
   campos que se duermen) se acumula en `energy_imbalance`.
 
+**Reacciones y fuego (ADR 008):**
+- **Reacciones:** `a + b` se evalúa en el barrido al recorrer `a` (6 vecinos, matriz
+  `MaterialTable::reaction`). Solo si algún compañero de `a` está en la máscara de
+  materiales de los 27 chunks (`Chunk::materials_mask`). Las de borde van por la cola
+  (`Move { react: true }`).
+- **Productos:** `change_in_place` / `ThermalChunk::change_voxel` hacen la contabilidad de
+  energía (latente + sensible); el `heat` extra va a `b`.
+- **`lifetime`:** sin estado, `Props::decay` es la probabilidad por tick.
+- **Vivos:** vóxeles que aún pueden reaccionar o caducar van a `TaskOut::live` para que el
+  chunk no se duerma.
+- **Combustión:** en `thermal::transitions` (`ThermalProps::burn`), con emisión de llamas.
+- **Pérdida de calor:** `heat_loss` en `thermal::diffuse`.
+
 **Tests:**
 - `mv_sim/src/tests.rs`: reglas del autómata, en un mundo de 3×3×3 chunks con suelo de
   piedra.
 - `tests_thermal.rs`: temperatura, con los materiales reales de `assets/materials`.
+- `tests_chem.rs`: reacciones (materiales sintéticos para reglas exactas y los reales),
+  incendio del bosque y energía.
 
 Toda regla nueva lleva un test.
 
@@ -163,7 +185,14 @@ struct compartido con WGSL (`FrameUniform`, `MaterialGpu`), cambia también el s
 ### Materiales (`mv_materials`)
 
 `MaterialRegistry::load_dir("assets/materials")` → tabla contigua por `MaterialId(u16)`;
-`air` siempre es id 0. Esquema documentado en `crates/mv_materials/README.md`.
+`air` siempre es id 0. `ReactionSet::load_dir("assets/reactions", &registry)` → matriz de
+reacciones. Esquemas documentados en `crates/mv_materials/README.md`.
+
+- **Hot reload** (`mv_game/src/hot_reload.rs`): sondea los RON.
+  `MaterialRegistry::keeps_ids_of` rechaza los cambios que renumeran.
+  `Simulation::set_materials`, `Editor::set_materials` y `Renderer::set_materials`
+  aplican la recarga.
+- **Ids:** no reordenar ni borrar materiales; añadir siempre al final.
 
 ### Convenciones de datos
 

@@ -20,7 +20,7 @@ Minecraft (mundo por chunks, construcción).
 | 2 — Mundo y edición | ✅ Completado |
 | 3 — Autómata celular | ✅ Completado |
 | 4 — Temperatura | ✅ Completado |
-| 5 — Reacciones y fuego | ⬜ Pendiente |
+| 5 — Reacciones y fuego | ✅ Completado |
 | 6 — Integridad y rígidos | ⬜ Pendiente |
 | 7 — Iluminación | ⬜ Pendiente |
 | 8 — Jugador y guardado | ⬜ Pendiente |
@@ -31,8 +31,10 @@ de render. Se puede excavar y construir con un pincel esférico en tiempo real, 
 de depuración (F3) muestra rendimiento, memoria y herramientas. La arena cae y forma
 montículos, el agua fluye y se nivela, los gases suben. El calor se difunde y viaja con el
 material: la lava funde el hielo, el agua hierve, el vapor sube y se condensa lejos, y la
-lava se solidifica en piedra al enfriarse (vista de calor con F5). Solo se simulan las
-zonas que cambian, en paralelo, a 30 Hz fijos y desacoplado del render. El render es raymarching en
+lava se solidifica en piedra al enfriarse (vista de calor con F5). Hay química: la lava
+que toca agua se apaga en obsidiana, el ácido disuelve la roca y el fuego se propaga por
+madera y hojas, sube en llamas, deja ceniza y humo, y se apaga con agua. Solo se simulan
+las zonas que cambian, en paralelo, a 30 Hz fijos y desacoplado del render. El render es raymarching en
 GPU sobre brickmaps.
 
 Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~700 FPS volando a 20 m/s sobre el
@@ -55,8 +57,10 @@ cargo bench -p mv_benches        # benchmarks (Criterion)
 ./scripts/ci.sh                  # chequeos completos (Windows: .\scripts\ci.ps1)
 ```
 
-Materiales: `assets/materials/*.ron` (esquema en
-[crates/mv_materials/README.md](crates/mv_materials/README.md)).
+Materiales y reacciones: `assets/materials/*.ron` y `assets/reactions/*.ron` (esquema en
+[crates/mv_materials/README.md](crates/mv_materials/README.md)). En builds de debug (o con
+`--hot-reload`) el juego los vuelve a cargar al guardarlos; si un archivo no es válido, lo
+dice en el log y sigue con la versión anterior.
 
 Profiling con [Tracy](https://github.com/wolfpld/tracy):
 
@@ -71,7 +75,12 @@ cargo bench -p mv_benches --bench sim_drop   # sin ventana, en una cuenca de pie
 cargo run --release -- --bench-drop          # en el juego, sobre el terreno real
 cargo bench -p mv_benches --bench sim_thermal # temperatura: lava sobre hielo, sin ventana
 cargo run --release -- --bench-heat          # lo mismo en el juego, con la vista de calor
+cargo bench -p mv_benches --bench sim_fire    # incendio de un bosque 6×6, sin ventana
+cargo run --release -- --bench-fire          # lo mismo en el juego, sobre el terreno real
 ```
+
+Para medir, el portátil debe estar enchufado: con batería la CPU baja de frecuencia y los
+tiempos se duplican.
 
 Benchmark de streaming en el juego real (espera a que cargue el mundo, vuela en línea recta
 y escribe en el log percentiles de tiempo de frame y memoria; usar con `vsync: false`):
@@ -108,7 +117,7 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 | `Click der.` (mantener) | Poner el material seleccionado (no pisa sólidos ni polvos) |
 | `Rueda` | Radio del pincel |
 | `1`–`9` | Material (también desde el overlay, con el ratón suelto) |
-| `F3` | Mostrar/ocultar el overlay de depuración (incluye el botón "Drop 100k sand + water") |
+| `F3` | Mostrar/ocultar el overlay de depuración (con los escenarios "Drop 100k sand + water", "Lava on ice" y "Forest fire") |
 | `P` | Pausar/reanudar la simulación |
 | `F5` | Vista de calor (azul frío · gris ambiente · amarillo 100 °C · naranja · blanco) |
 | `Esc` | Soltar el ratón; si ya está suelto, salir |
