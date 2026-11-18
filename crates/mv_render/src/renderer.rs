@@ -5,6 +5,7 @@ use mv_core::ChunkPos;
 use mv_world::Chunk;
 
 use crate::blit::BlitPass;
+use crate::bodies::{BodyInstance, BodyVolume};
 use crate::camera::Camera;
 use crate::context::{GpuContext, SurfaceSize};
 use crate::gpu_volume::{GpuVolume, MaterialGpu, UploadStats, VolumeDesc, VolumeStats};
@@ -44,6 +45,7 @@ pub struct Renderer {
     raymarch: RaymarchPass,
     blit: BlitPass,
     heat: HeatVolume,
+    bodies: BodyVolume,
     heat_view: bool,
     ambient: f32,
     sun_dir: Vec3,
@@ -55,8 +57,13 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(ctx: GpuContext, volume: &VolumeDesc) -> Self {
         let heat = HeatVolume::new(&ctx.device, volume.dims, volume.heat_capacity);
+        let bodies = BodyVolume::new(
+            &ctx.device,
+            volume.body_capacity,
+            volume.body_voxel_capacity,
+        );
         let volume = GpuVolume::new(&ctx.device, volume);
-        let raymarch = RaymarchPass::new(&ctx.device, &volume, &heat, ctx.size());
+        let raymarch = RaymarchPass::new(&ctx.device, &volume, &heat, &bodies, ctx.size());
         let blit = BlitPass::new(&ctx.device, ctx.surface_format(), raymarch.output_view());
         Self {
             ctx,
@@ -64,6 +71,7 @@ impl Renderer {
             raymarch,
             blit,
             heat,
+            bodies,
             heat_view: false,
             ambient: 20.0,
             sun_dir: Vec3::new(0.45, 0.8, 0.35).normalize(),
@@ -85,8 +93,13 @@ impl Renderer {
             return;
         }
         self.ctx.resize(size);
-        self.raymarch
-            .resize(&self.ctx.device, &self.volume, &self.heat, size);
+        self.raymarch.resize(
+            &self.ctx.device,
+            &self.volume,
+            &self.heat,
+            &self.bodies,
+            size,
+        );
         self.blit
             .set_source(&self.ctx.device, self.raymarch.output_view());
     }
@@ -127,6 +140,12 @@ impl Renderer {
             self.volume.dims(),
             fields,
         );
+    }
+
+    /// Sets the rigid bodies drawn from now on (call every frame they move).
+    pub fn set_bodies(&mut self, bodies: &[BodyInstance<'_>]) {
+        let origin = self.volume.origin().origin().0.as_dvec3();
+        self.bodies.upload(&self.ctx.queue, origin, bodies);
     }
 
     /// Moves the rendered window of chunks so its minimum corner is `origin`.
@@ -223,6 +242,7 @@ impl Renderer {
             brush,
             fog: [self.fog_k, self.fog_start, self.ambient, 0.0],
             volume_dims: [dims.x, dims.y, dims.z, u32::from(self.heat_view)],
+            bodies: [self.bodies.count(), 0, 0, 0],
         }
     }
 }

@@ -5,6 +5,7 @@
 //! tonemaps it onto the swapchain. See `PROMPT.md` §7.
 
 mod blit;
+mod bodies;
 mod camera;
 mod context;
 mod gpu_volume;
@@ -13,6 +14,7 @@ mod raymarch;
 mod renderer;
 mod slots;
 
+pub use bodies::BodyInstance;
 pub use camera::Camera;
 pub use context::{GpuContext, SurfaceSize};
 pub use gpu_volume::{

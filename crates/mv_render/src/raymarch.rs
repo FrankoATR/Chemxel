@@ -2,6 +2,7 @@
 
 use bytemuck::{Pod, Zeroable};
 
+use crate::bodies::BodyVolume;
 use crate::context::SurfaceSize;
 use crate::gpu_volume::GpuVolume;
 use crate::heat::HeatVolume;
@@ -29,6 +30,8 @@ pub(crate) struct FrameUniform {
     pub fog: [f32; 4],
     /// xyz: window size in chunks; w: flags (bit 0: heat view).
     pub volume_dims: [u32; 4],
+    /// x: number of rigid bodies.
+    pub bodies: [u32; 4],
 }
 
 #[derive(Debug)]
@@ -46,6 +49,7 @@ impl RaymarchPass {
         device: &wgpu::Device,
         volume: &GpuVolume,
         heat: &HeatVolume,
+        bodies: &BodyVolume,
         size: SurfaceSize,
     ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -82,6 +86,8 @@ impl RaymarchPass {
                 storage(4),
                 storage(6),
                 storage(7),
+                storage(8),
+                storage(9),
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -115,7 +121,15 @@ impl RaymarchPass {
         });
 
         let output_view = create_output(device, size);
-        let bind_group = create_bind_group(device, &layout, &uniform, volume, heat, &output_view);
+        let bind_group = create_bind_group(
+            device,
+            &layout,
+            &uniform,
+            volume,
+            heat,
+            bodies,
+            &output_view,
+        );
         Self {
             pipeline,
             layout,
@@ -131,6 +145,7 @@ impl RaymarchPass {
         device: &wgpu::Device,
         volume: &GpuVolume,
         heat: &HeatVolume,
+        bodies: &BodyVolume,
         size: SurfaceSize,
     ) {
         if size == self.size || size.is_empty() {
@@ -144,6 +159,7 @@ impl RaymarchPass {
             &self.uniform,
             volume,
             heat,
+            bodies,
             &self.output_view,
         );
     }
@@ -198,10 +214,12 @@ fn create_bind_group(
     uniform: &wgpu::Buffer,
     volume: &GpuVolume,
     heat: &HeatVolume,
+    bodies: &BodyVolume,
     output: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let [grid, bricks, pool, materials] = volume.buffers();
     let [heat_index, heat_pool] = heat.buffers();
+    let [body_headers, body_voxels] = bodies.buffers();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("raymarch"),
         layout,
@@ -237,6 +255,14 @@ fn create_bind_group(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: heat_pool.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: body_headers.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: body_voxels.as_entire_binding(),
             },
         ],
     })

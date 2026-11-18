@@ -10,6 +10,11 @@
 // one material), or a slot index into the next level.
 // Index orders are always x-fastest: x + y*N + z*N*N.
 // Coordinates are in voxels, relative to the volume's minimum corner.
+//
+// Rigid bodies (mirrors mv_render::bodies): body_headers[i] has the inverse rotation
+// (rows), the position and the size + voxel offset of a dense grid stored in
+// body_voxels (two u16 per u32). They are traced after the world; the nearest hit
+// wins.
 
 const EMPTY: u32 = 0xffffffffu;
 const UNIFORM_BIT: u32 = 0x80000000u;
@@ -29,6 +34,23 @@ struct Frame {
     brush: vec4<f32>,       // xyz: brush centre (volume-relative), w: radius (<= 0: none)
     fog: vec4<f32>,         // x: k, y: start s in 1 - exp(-((t - s) * k)^2), z: ambient °C
     volume_dims: vec4<u32>, // xyz: volume size in chunks, w: flags (bit 0: heat view)
+    bodies: vec4<u32>,      // x: number of rigid bodies
+};
+
+struct Body {
+    row0: vec4<f32>,      // inverse rotation (world -> body), by rows
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    position: vec4<f32>,  // xyz: grid frame origin, volume-relative
+    size: vec4<u32>,      // xyz: grid size; w: offset of the first voxel (u16 units)
+};
+
+struct BodyHit {
+    found: bool,
+    t: f32,
+    material: u32,
+    normal: vec3<f32>,    // world space
+    seed: vec3<i32>,      // for the per-voxel colour variation
 };
 
 struct Material {
@@ -54,6 +76,8 @@ struct Hit {
 // 16³ temperature cells (4³ voxels each), x-fastest.
 @group(0) @binding(6) var<storage, read> heat_index: array<u32>;
 @group(0) @binding(7) var<storage, read> heat_pool: array<f32>;
+@group(0) @binding(8) var<storage, read> body_headers: array<Body>;
+@group(0) @binding(9) var<storage, read> body_voxels: array<u32>;
 
 fn no_hit() -> Hit {
     return Hit(false, 0.0, 0u, 0, vec3<i32>(0));
@@ -206,6 +230,70 @@ fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
     return no_hit();
 }
 
+fn body_voxel(b: Body, c: vec3<i32>) -> u32 {
+    let s = vec3<i32>(b.size.xyz);
+    let i = b.size.w + u32(c.x + c.y * s.x + c.z * s.x * s.y);
+    let word = body_voxels[i >> 1u];
+    return (word >> ((i & 1u) * 16u)) & 0xffffu;
+}
+
+// Nearest rigid body voxel along the ray closer than t_best.
+fn trace_bodies(ro: vec3<f32>, rd: vec3<f32>, t_best: f32) -> BodyHit {
+    var best = BodyHit(false, t_best, 0u, vec3<f32>(0.0), vec3<i32>(0));
+    for (var i = 0u; i < frame.bodies.x; i++) {
+        let b = body_headers[i];
+        let rel = ro - b.position.xyz;
+        let o = vec3<f32>(dot(b.row0.xyz, rel), dot(b.row1.xyz, rel), dot(b.row2.xyz, rel));
+        let d = vec3<f32>(dot(b.row0.xyz, rd), dot(b.row1.xyz, rd), dot(b.row2.xyz, rd));
+        let size = vec3<f32>(b.size.xyz);
+        // Slab test against the grid box.
+        let inv = 1.0 / select(d, vec3<f32>(1e-12), abs(d) < vec3<f32>(1e-12));
+        let t0 = (vec3<f32>(0.0) - o) * inv;
+        let t1 = (size - o) * inv;
+        let tn = min(t0, t1);
+        let tf = max(t0, t1);
+        let t_enter = max(max(tn.x, tn.y), max(tn.z, 0.0));
+        let t_exit = min(min(tf.x, tf.y), tf.z);
+        if t_exit <= t_enter || t_enter >= best.t {
+            continue;
+        }
+        // Voxel DDA inside the grid.
+        let step = vec3<i32>(sign(d));
+        let p = o + d * (t_enter + 1e-4);
+        var c = clamp(vec3<i32>(floor(p)), vec3<i32>(0), vec3<i32>(b.size.xyz) - 1);
+        let delta = abs(inv);
+        var t_max = (vec3<f32>(c) + max(vec3<f32>(step), vec3<f32>(0.0)) - o) * inv;
+        var axis = 0;
+        if tn.y >= tn.x && tn.y >= tn.z { axis = 1; } else if tn.z >= tn.x { axis = 2; }
+        var t = t_enter;
+        let max_steps = b.size.x + b.size.y + b.size.z;
+        for (var s = 0u; s < max_steps; s++) {
+            if t >= best.t {
+                break;
+            }
+            let m = body_voxel(b, c);
+            if m != 0u {
+                var n = vec3<f32>(0.0);
+                n[axis] = -sign(d[axis]);
+                // Back to world space: R * n, and R's columns are the rows above.
+                let wn = n.x * vec3<f32>(b.row0.x, b.row1.x, b.row2.x)
+                    + n.y * vec3<f32>(b.row0.y, b.row1.y, b.row2.y)
+                    + n.z * vec3<f32>(b.row0.z, b.row1.z, b.row2.z);
+                best = BodyHit(true, t, m, wn, c + vec3<i32>(i32(i) * 7919));
+                break;
+            }
+            axis = min_axis(t_max);
+            t = t_max[axis];
+            t_max[axis] += delta[axis];
+            c[axis] += step[axis];
+            if c[axis] < 0 || c[axis] >= i32(b.size[axis]) {
+                break;
+            }
+        }
+    }
+    return best;
+}
+
 fn hash3(p: vec3<i32>) -> f32 {
     // WGSL forbids mixing bitwise and arithmetic operators without parentheses.
     var h = (u32(p.x) * 73856093u) ^ (u32(p.y) * 19349663u) ^ (u32(p.z) * 83492791u);
@@ -266,25 +354,37 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var color = sky(rd);
     let hit = trace(ro, rd);
-    if hit.found {
-        let mat = materials[hit.material];
+    let body = trace_bodies(ro, rd, select(1e30, hit.t, hit.found));
+    if hit.found || body.found {
         var normal = vec3<f32>(0.0);
-        normal[hit.axis] = -sign(rd[hit.axis]);
+        var material = hit.material;
+        var seed = hit.voxel;
+        var t = hit.t;
+        if body.found {
+            normal = body.normal;
+            material = body.material;
+            seed = body.seed;
+            t = body.t;
+        } else {
+            normal[hit.axis] = -sign(rd[hit.axis]);
+        }
+        let mat = materials[material];
 
-        // Fixed per-face ambient makes voxel edges readable before real lighting.
-        let face_ambient = select(select(0.72, 0.88, hit.axis != 1), 1.0, hit.axis == 1 && normal.y > 0.0);
+        // Fixed per-face ambient makes voxel edges readable before real lighting:
+        // 1.0 on top faces, 0.88 on sides, 0.72 below (smooth for rotated bodies).
+        let face_ambient = select(0.88 + 0.16 * normal.y, 0.88 + 0.12 * normal.y, normal.y > 0.0);
         let diffuse = max(dot(normal, frame.sun_dir.xyz), 0.0);
-        let variation = 0.9 + 0.1 * hash3(hit.voxel);
+        let variation = 0.9 + 0.1 * hash3(seed);
         let base = mat.color.rgb * variation;
         color = base * (0.35 * face_ambient + 0.75 * diffuse) + base * mat.params.x * 0.6;
 
-        if (frame.volume_dims.w & 1u) != 0u {
+        if !body.found && (frame.volume_dims.w & 1u) != 0u {
             let heat = heat_color(temperature_at(hit.voxel), frame.fog.z);
             color = heat * (0.55 + 0.45 * face_ambient) * 2.0;
         }
 
         // Brush preview: tint voxels inside the brush sphere.
-        if frame.brush.w > 0.0 {
+        if !body.found && frame.brush.w > 0.0 {
             let d = vec3<f32>(hit.voxel) + 0.5 - frame.brush.xyz;
             if dot(d, d) <= frame.brush.w * frame.brush.w {
                 color = mix(color, vec3<f32>(1.0, 0.85, 0.3), 0.35);
@@ -292,7 +392,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
 
         // Distance fog, fully opaque near the edge of the render distance.
-        let ft = max(hit.t - frame.fog.y, 0.0) * frame.fog.x;
+        let ft = max(t - frame.fog.y, 0.0) * frame.fog.x;
         color = mix(color, sky(rd), 1.0 - exp(-ft * ft));
     }
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(color, 1.0));

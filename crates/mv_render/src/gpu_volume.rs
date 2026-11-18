@@ -81,6 +81,9 @@ pub struct VolumeDesc {
     pub brick_capacity: u32,
     /// Temperature fields the heat view can show (16 KiB each).
     pub heat_capacity: u32,
+    /// Rigid bodies drawn at once, and their total voxels (2 bytes each).
+    pub body_capacity: u32,
+    pub body_voxel_capacity: u32,
 }
 
 /// Counters from uploads, for the debug overlay and budgets.
