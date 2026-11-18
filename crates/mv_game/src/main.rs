@@ -52,6 +52,14 @@ fn main() -> anyhow::Result<()> {
             seconds_arg("--bench-tower")
                 .map(|s| bench_drop::BenchDrop::new(drop_test::Scenario::TowerCollapse, secs(s)))
         });
+    // `--lighting=full|shadows|off` starts with that preset (handy for --bench-fly).
+    let lighting_preset = std::env::args()
+        .find_map(|a| a.strip_prefix("--lighting=").map(str::to_owned))
+        .map_or(0, |p| match p.as_str() {
+            "shadows" => 1,
+            "off" => 2,
+            _ => 0,
+        });
     let bench = seconds_arg("--bench-fly").map(|seconds| {
         let c = &config.controls;
         let speed = c.fly_speed * c.fast_multiplier * mv_core::consts::VOXELS_PER_BLOCK as f32;
@@ -72,6 +80,7 @@ fn main() -> anyhow::Result<()> {
         hot_reload,
     };
     let mut app = app::App::new(config, materials, world, bench, bench_drop);
+    app.set_lighting_preset(lighting_preset);
     event_loop
         .run_app(&mut app)
         .context("running the event loop")?;

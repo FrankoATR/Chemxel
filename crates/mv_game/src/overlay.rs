@@ -344,7 +344,7 @@ fn brush(ui: &mut egui::Ui, registry: &MaterialRegistry, editor: &mut Editor) {
 
 fn help(ui: &mut egui::Ui, grabbed: bool) {
     let text = if grabbed {
-        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD/Space/Ctrl move · Shift fast · Esc release mouse · F3 overlay · F5 heat view"
+        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD/Space/Ctrl move · Shift fast · Esc release mouse · F3 overlay · F5 heat view · F6 lighting"
     } else {
         "Click the world to capture the mouse · Esc quits · F3 overlay"
     };

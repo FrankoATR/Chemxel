@@ -12,7 +12,7 @@
              heat_capacity: 0.8, melt_at: 1200, melts_into: "lava"),
     Material(name: "dirt",     state: Solid,  density: 1500, color: (115, 80, 50, 255),   conductivity: 0.5,
              heat_capacity: 0.8),
-    Material(name: "grass",    state: Solid,  density: 1300, color: (80, 150, 60, 255),   conductivity: 0.4,
+    Material(name: "grass",    state: Solid,  density: 1300, color: (82, 132, 56, 255),   conductivity: 0.4,
              latent_heat: 100000,
              flammable: true, ignite_at: 250, burns_into: "dirt", burn_rate: 0.05),
     Material(name: "sand",     state: Powder, density: 1600, color: (220, 200, 140, 255), conductivity: 0.3,

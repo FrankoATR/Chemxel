@@ -27,6 +27,7 @@ cargo bench -p mv_benches --bench sim_fire  # incendio de un bosque, sin ventana
 cargo run --release -- --bench-fire[=SECS]  # lo mismo en el juego
 cargo run --release -- --hot-reload         # recarga de RON también en release
 cargo run --release -- --bench-tower[=SECS] # torre con la base excavada (rígidos)
+cargo run --release -- --bench-fly --lighting=off  # (o shadows/full) coste de la iluminación
 ```
 
 Benchmarks siempre con el portátil enchufado: con batería los tiempos se multiplican
@@ -194,7 +195,14 @@ de shader rompe la CI, no el arranque del juego.
 1. `GpuVolume::flush`.
 2. Compute `raymarch.wgsl`: DDA de 3 niveles chunk → brick 8³ → vóxel, salida HDR
    `rgba16float`.
-3. `blit.wgsl`: tonemap ACES a la swapchain sRGB.
+   - `trace(ro, rd, skip, t_limit)`: el mismo DDA para el rayo primario, la sombra
+     y el rayo a través de translúcidos.
+   - `shade()`: sol con sombra, AO (`corner_ao` + `ray_ambient`, que además recoge luz
+     de emisivos), emisivos.
+   - Una capa de transparencia (`material_run` mide el grosor).
+   - Parámetros en `FrameUniform.lighting`, desde `Renderer::set_lighting`
+     (ADR 010).
+3. `blit.wgsl`: bloom barato y tonemap ACES a la swapchain sRGB.
 4. Closure de overlay (egui) sobre una vista no sRGB de la swapchain.
 
 **Datos GPU:**

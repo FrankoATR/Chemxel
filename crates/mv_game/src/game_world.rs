@@ -154,6 +154,10 @@ impl GameWorld {
 pub fn gpu_materials(registry: &MaterialRegistry) -> Vec<MaterialGpu> {
     registry
         .iter()
-        .map(|(_, m)| MaterialGpu::from_srgba(m.color, m.emissive))
+        .map(|(_, m)| {
+            let mut gpu = MaterialGpu::from_srgba(m.color, m.emissive);
+            gpu.params[1] = f32::from(u8::from(m.state == mv_materials::MatterState::Liquid));
+            gpu
+        })
         .collect()
 }

@@ -37,6 +37,9 @@ use crate::hot_reload::HotReload;
 use crate::input::InputState;
 use crate::overlay::{self, OverlayData, Timings};
 
+/// Lighting quality presets cycled with F6.
+const LIGHTING_PRESETS: [&str; 3] = ["full", "shadows only", "off"];
+
 /// How often the (whole-world) memory statistics are recomputed.
 const WORLD_STATS_PERIOD: Duration = Duration::from_millis(500);
 
@@ -81,6 +84,8 @@ pub struct App {
     input: InputState,
     cursor_grabbed: bool,
     show_overlay: bool,
+    /// Lighting quality preset (F6): 0 full (config), 1 shadows only, 2 off.
+    lighting_preset: usize,
     stats: Stats,
     bench: Option<BenchFly>,
     bench_drop: Option<BenchDrop>,
@@ -136,6 +141,7 @@ impl App {
             input: InputState::default(),
             cursor_grabbed: false,
             show_overlay: true,
+            lighting_preset: 0,
             stats: Stats::default(),
             bench,
             bench_drop,
@@ -174,6 +180,7 @@ impl App {
         let gui = Gui::new(&window, &ctx);
         let mut renderer = Renderer::new(ctx, &GameWorld::volume_desc(&self.config));
         renderer.set_materials(&game_world::gpu_materials(&self.registry));
+        renderer.set_lighting(self.lighting());
         let voxels_per_chunk = mv_core::consts::CHUNK_SIZE as f32;
         renderer
             .set_view_distance(self.config.render.render_distance_chunks as f32 * voxels_per_chunk);
@@ -182,6 +189,26 @@ impl App {
             renderer,
             gui,
         })
+    }
+
+    /// Starts with lighting preset `index` (0 full, 1 shadows only, 2 off).
+    pub fn set_lighting_preset(&mut self, index: usize) {
+        self.lighting_preset = index.min(LIGHTING_PRESETS.len() - 1);
+    }
+
+    /// Lighting settings of the current preset (F6).
+    fn lighting(&self) -> mv_render::Lighting {
+        let rc = &self.config.render;
+        let (shadows, ao) = match self.lighting_preset {
+            0 => (rc.shadow_distance, rc.ao_strength),
+            1 => (rc.shadow_distance, 0.0),
+            _ => (0.0, 0.0),
+        };
+        mv_render::Lighting {
+            sun_dir: glam::Vec3::from_array(rc.sun_direction),
+            shadow_distance: shadows,
+            ao_strength: ao,
+        }
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
@@ -284,20 +311,19 @@ impl App {
             }
         }
         if let Some(scenario) = spawn {
-            if scenario == drop_test::Scenario::LavaOnIce
-                && let Some(r) = self.running.as_mut()
-            {
-                r.renderer.set_heat_view(true);
-            }
             let ground = self.ground_below_camera();
-            if matches!(
-                scenario,
-                drop_test::Scenario::ForestFire | drop_test::Scenario::TowerCollapse
-            ) {
-                // Look at the forest from the side, a bit above the canopies.
-                self.camera.position = ground.0.as_dvec3() + glam::DVec3::new(-110.0, 90.0, -110.0);
+            // Look at the scene from the side and a bit above.
+            let view = match scenario {
+                drop_test::Scenario::ForestFire | drop_test::Scenario::TowerCollapse => {
+                    Some(glam::DVec3::new(-110.0, 90.0, -110.0))
+                }
+                drop_test::Scenario::LavaOnIce => Some(glam::DVec3::new(-45.0, 38.0, -45.0)),
+                drop_test::Scenario::SandAndWater => None,
+            };
+            if let Some(offset) = view {
+                self.camera.position = ground.0.as_dvec3() + offset;
                 self.camera.yaw = -3.0 * std::f32::consts::FRAC_PI_4; // towards +x, +z
-                self.camera.pitch = -0.35;
+                self.camera.pitch = -0.4;
             }
             self.spawn_scenario(ground, scenario);
         }
@@ -529,6 +555,19 @@ impl App {
                     if let Some(r) = self.running.as_mut() {
                         let on = !r.renderer.heat_view();
                         r.renderer.set_heat_view(on);
+                    }
+                }
+                KeyCode::F6 => {
+                    self.lighting_preset = (self.lighting_preset + 1) % LIGHTING_PRESETS.len();
+                    let lighting = self.lighting();
+                    tracing::info!(
+                        "lighting: {} (shadows {} voxels, AO {})",
+                        LIGHTING_PRESETS[self.lighting_preset],
+                        lighting.shadow_distance,
+                        lighting.ao_strength
+                    );
+                    if let Some(r) = self.running.as_mut() {
+                        r.renderer.set_lighting(lighting);
                     }
                 }
                 _ => {

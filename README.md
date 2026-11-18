@@ -22,7 +22,7 @@ Minecraft (mundo por chunks, construcción).
 | 4 — Temperatura | ✅ Completado |
 | 5 — Reacciones y fuego | ✅ Completado |
 | 6 — Integridad y rígidos | ✅ Completado |
-| 7 — Iluminación | ⬜ Pendiente |
+| 7 — Iluminación | ✅ Completado |
 | 8 — Jugador y guardado | ⬜ Pendiente |
 
 Hoy el juego genera un mundo procedural infinito (colinas, montañas, playas y mar) que se
@@ -40,8 +40,11 @@ al quedarse quieta, vuelve a formar parte del mundo. Solo se simulan las zonas q
 cambian, en paralelo, a 30 Hz fijos y desacoplado del render. El render es raymarching en
 GPU sobre brickmaps.
 
-Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~700 FPS volando a 20 m/s sobre el
-terreno, sin frames por encima de 16,7 ms. El detalle y las métricas de cada hito están en
+La imagen tiene sombras del sol, oclusión ambiental, lava y fuego que brillan e iluminan
+lo que tienen cerca, agua, vapor y vidrio translúcidos, y niebla (F6 alterna la calidad).
+
+Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~240 FPS volando a 20 m/s sobre el
+terreno con toda la iluminación (~470 sin ella). El detalle y las métricas de cada hito están en
 la sección "Estado del proyecto" de [PROMPT.md](PROMPT.md#12-estado-del-proyecto).
 
 ## Requisitos
@@ -91,6 +94,7 @@ y escribe en el log percentiles de tiempo de frame y memoria; usar con `vsync: f
 
 ```bash
 cargo run --release -- --bench-fly        # 20 s; --bench-fly=60 para 60 s
+cargo run --release -- --bench-fly --lighting=off   # o shadows / full: coste de la iluminación
 ```
 
 Logs: variable `RUST_LOG`, p. ej. `RUST_LOG=chemxel=debug cargo run --release`.
@@ -102,7 +106,8 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 
 - **Ventana:** tamaño, título.
 - **Render:** vsync, distancia horizontal y vertical, memoria del brick pool, slots de
-  chunk, presupuesto de subida por frame, campo de visión.
+  chunk, presupuesto de subida por frame, campo de visión, dirección del sol, distancia
+  de sombras e intensidad de la oclusión ambiental.
 - **Mundo:** semilla, nivel del mar, forma del terreno, margen de descarga, trabajos de
   generación en paralelo.
 - **Controles:** velocidad de la cámara, sensibilidad del ratón.
@@ -126,6 +131,7 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 | `F3` | Mostrar/ocultar el overlay de depuración (con los escenarios "Drop 100k sand + water", "Lava on ice", "Forest fire" y "Tower collapse") |
 | `P` | Pausar/reanudar la simulación |
 | `F5` | Vista de calor (azul frío · gris ambiente · amarillo 100 °C · naranja · blanco) |
+| `F6` | Calidad de iluminación: completa → solo sombras → sin iluminación |
 | `Esc` | Soltar el ratón; si ya está suelto, salir |
 
 
