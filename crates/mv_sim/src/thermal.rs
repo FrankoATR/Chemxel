@@ -17,7 +17,7 @@ use mv_world::{BrickRef, Chunk, MaterialId};
 
 use crate::aabb::Aabb;
 use crate::rng;
-use crate::table::{MaterialTable, ThermalProps};
+use crate::table::{Kind, MaterialTable, ThermalProps};
 
 /// Cell edge in voxels.
 pub const CELL: i32 = THERMAL_CELL_SIZE as i32;
@@ -133,6 +133,12 @@ impl ThermalChunk {
             .zip(self.cap.iter())
             .map(|(&t, &c)| f64::from(t) * f64::from(c))
             .sum()
+    }
+
+    /// Sensible energy of one cell.
+    #[inline]
+    pub fn energy_of(&self, cell: usize) -> f64 {
+        f64::from(self.temp[cell]) * f64::from(self.cap[cell])
     }
 
     /// Updates the composition sums of `cell` for a voxel `old → new`.
@@ -349,6 +355,8 @@ pub struct TransitionOut {
     /// Energy not conserved by the volume-preserving phase changes (ADR 007):
     /// (sensible after − sensible before) + latent absorbed.
     pub imbalance: f64,
+    /// Cells where a solid disappeared (melted, burnt).
+    pub solid_lost: Aabb,
 }
 
 /// Directions a flame may be emitted in: up first, then the sides.
@@ -392,6 +400,9 @@ pub fn transitions(
             let world = origin + pi.as_i64vec3();
             if let Some(into) = p.change_at(t, params.hysteresis) {
                 if rng::hash(params.seed ^ SALT_PHASE, params.tick, world) < params.rate {
+                    if table.get(m).kind == Kind::Static && table.get(into).kind != Kind::Static {
+                        out.solid_lost.include(pi);
+                    }
                     out.imbalance += field.change_voxel(c, p, table.thermal(into), f32::INFINITY);
                     chunk.set(lp, into);
                     out.changed.include(pi);
@@ -403,6 +414,9 @@ pub fn transitions(
                 continue;
             };
             if rng::hash(params.seed ^ SALT_BURN, params.tick, world) < burn.rate {
+                if table.get(m).kind == Kind::Static && table.get(burn.into).kind != Kind::Static {
+                    out.solid_lost.include(pi);
+                }
                 out.imbalance += field.change_voxel(c, p, table.thermal(burn.into), burn.max_temp);
                 chunk.set(lp, burn.into);
                 out.changed.include(pi);

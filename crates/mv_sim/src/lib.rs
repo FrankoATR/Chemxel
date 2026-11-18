@@ -24,6 +24,7 @@
 
 mod aabb;
 mod automaton;
+mod integrity;
 mod rng;
 mod table;
 mod thermal;
@@ -39,6 +40,7 @@ use mv_world::World;
 use rayon::prelude::*;
 
 pub use aabb::Aabb;
+pub use integrity::{Anchor, VoxelBody};
 pub use table::{Kind, MaterialTable, Props, Rule, ThermalProps};
 pub use thermal::{CELL, CELLS, CELLS_AXIS, CellArray};
 
@@ -66,6 +68,10 @@ pub struct TickStats {
     pub decays: u32,
     /// Flames emitted by burning voxels.
     pub flames: u32,
+    /// Voxels visited by the structural integrity flood fill.
+    pub integrity_visited: u32,
+    /// Floating pieces cut out of the grid this tick.
+    pub detached: u32,
 }
 
 /// Simulation state of an awake chunk.
@@ -104,6 +110,10 @@ pub struct Simulation {
     diffusion_rate: f32,
     /// Energy deliberately not conserved (phase changes, fields put to sleep).
     energy_imbalance: f64,
+
+    integrity: integrity::Integrity,
+    /// Floating pieces cut out of the grid, waiting for the physics engine.
+    detached: Vec<VoxelBody>,
 }
 
 impl Simulation {
@@ -150,7 +160,37 @@ impl Simulation {
             transition_rate: config.transition_rate,
             diffusion_rate: config.diffusion_rate,
             energy_imbalance: 0.0,
+            integrity: integrity::Integrity::new(integrity::Limits {
+                max_voxels: config.integrity_max_voxels as usize,
+                max_extent: i64::from(config.integrity_max_extent),
+                budget: config.integrity_budget_voxels as usize,
+            }),
+            detached: Vec::new(),
         }
+    }
+
+    /// Sets what counts as ground for structural integrity (besides unloaded chunks
+    /// and components too big to move). Without one, only those two anchor.
+    pub fn set_anchor(&mut self, anchor: Option<Anchor>) {
+        self.integrity.set_anchor(anchor);
+    }
+
+    /// Floating pieces cut out of the grid since the last call (for the physics
+    /// engine). Their voxels are already air in the world.
+    pub fn take_detached(&mut self) -> Vec<VoxelBody> {
+        std::mem::take(&mut self.detached)
+    }
+
+    /// Regions waiting for a structural integrity check.
+    pub fn integrity_pending(&self) -> usize {
+        self.integrity.pending()
+    }
+
+    /// Voxels were written into `[min, max]` by someone else than the editor (a
+    /// rigid body put back into the grid): wakes the simulation, updates
+    /// temperature fields and re-checks integrity there (the piece may be hanging).
+    pub fn voxels_placed(&mut self, world: &World, min: WorldPos, max: WorldPos) {
+        self.edited(world, min, max, None);
     }
 
     pub fn ambient_temperature(&self) -> f32 {
@@ -207,7 +247,8 @@ impl Simulation {
 
     /// Reacts to an external edit of the world box `[min, max]`: wakes the
     /// automaton there, updates the composition of temperature fields, and gives
-    /// voxels of `placed` (if any) their base temperature.
+    /// voxels of `placed` (if any) their base temperature. Removals (`placed ==
+    /// None`) also queue a structural integrity check.
     pub fn edited(
         &mut self,
         world: &World,
@@ -217,6 +258,9 @@ impl Simulation {
     ) {
         self.wake_box(world, min, max);
         let (lo, hi) = (min.0.min(max.0), min.0.max(max.0));
+        if placed.is_none() {
+            self.integrity.push(lo, hi);
+        }
         let needs_field = placed.is_some_and(|m| {
             self.table.thermal(m).base_temperature.is_some()
                 || unstable_at(&self.table, m, self.ambient, self.hysteresis)
@@ -376,6 +420,13 @@ impl Simulation {
                 stats.moves += out.moves;
                 stats.reactions += out.reactions;
                 stats.decays += out.decays;
+                if !out.solid_lost.is_empty() {
+                    let origin = pos.origin().0;
+                    self.integrity.push(
+                        origin + out.solid_lost.min.as_i64vec3(),
+                        origin + out.solid_lost.max.as_i64vec3(),
+                    );
+                }
                 self.energy_imbalance += out.imbalance;
                 if out.needs_field || !out.heat.is_empty() {
                     self.ensure_field(world, pos);
@@ -417,8 +468,41 @@ impl Simulation {
         let (transitions, flames) = self.thermal_step(world);
         stats.transitions = transitions;
         stats.flames = flames;
+        let (visited, detached) = self.integrity_step(world);
+        stats.integrity_visited = visited;
+        stats.detached = detached;
         stats.thermal_chunks = self.thermal.len();
         self.stats = stats;
+    }
+
+    /// Structural integrity: cuts floating pieces out of the grid. Returns the voxels
+    /// visited and the pieces detached.
+    fn integrity_step(&mut self, world: &mut World) -> (u32, u32) {
+        if self.integrity.pending() == 0 {
+            return (0, 0);
+        }
+        let table = Arc::clone(&self.table);
+        let pass = self.integrity.run(world, &table);
+        let detached = pass.bodies.len() as u32;
+        for body in pass.bodies {
+            let lo = body.origin.0;
+            let hi = lo + body.size.as_i64vec3() - 1;
+            // What rested on it falls, and temperature fields lose its voxels.
+            self.mark_dirty(world, lo - 1, hi + 1);
+            if !self.thermal.is_empty() {
+                for (p, m) in body.filled() {
+                    self.voxel_removed(WorldPos(lo + p.as_i64vec3()), m);
+                }
+            }
+            tracing::debug!(
+                "detached a piece of {} voxels at {:?} ({:?})",
+                body.count,
+                body.origin,
+                body.size
+            );
+            self.detached.push(body);
+        }
+        (pass.visited as u32, detached)
     }
 
     /// Diffusion, growth/sleep of temperature fields, then phase changes and
@@ -546,6 +630,13 @@ impl Simulation {
             self.energy_imbalance += out.imbalance;
             count += out.count;
             flames += out.flames;
+            if !out.solid_lost.is_empty() {
+                let origin = pos.origin().0;
+                self.integrity.push(
+                    origin + out.solid_lost.min.as_i64vec3(),
+                    origin + out.solid_lost.max.as_i64vec3(),
+                );
+            }
             if !out.changed.is_empty() {
                 world.mark_edited(pos);
                 let origin = pos.origin().0;
@@ -591,6 +682,27 @@ impl Simulation {
                     self.ensure_field(world, c);
                 }
             }
+        }
+    }
+
+    /// Bookkeeping for a voxel of `old` that left the grid (now air) taking its
+    /// energy with it: the cell keeps its temperature, no latent heat is released.
+    fn voxel_removed(&mut self, pos: WorldPos, old: MaterialId) {
+        let (c, l) = pos.to_chunk_local();
+        let (po, pa) = (
+            *self.table.thermal(old),
+            *self.table.thermal(MaterialId::AIR),
+        );
+        let latent = f64::from(pa.latent - po.latent);
+        match self.thermal.get_mut(&c) {
+            Some(f) => {
+                let cell = cell_of(l.as_ivec3());
+                let before = f.energy_of(cell);
+                let t = f.temp[cell];
+                f.replace_voxel(cell, &po, &pa, t);
+                self.energy_imbalance += f.energy_of(cell) - before + latent;
+            }
+            None => self.energy_imbalance += ambient_change(&po, &pa, self.ambient),
         }
     }
 
@@ -672,6 +784,16 @@ impl Simulation {
         if mv.react {
             world.set_voxel(mv.src, mv.src_into);
             world.set_voxel(mv.dst, mv.dst_into);
+            for (pos, old, new) in [
+                (mv.src, mv.src_material, mv.src_into),
+                (mv.dst, mv.dst_material, mv.dst_into),
+            ] {
+                if self.table.get(old).kind == Kind::Static
+                    && self.table.get(new).kind != Kind::Static
+                {
+                    self.integrity.push(pos.0, pos.0);
+                }
+            }
             self.voxel_changed(world, mv.src, mv.src_material, mv.src_into);
             self.voxel_changed(world, mv.dst, mv.dst_material, mv.dst_into);
             if mv.heat != 0.0 {
@@ -779,5 +901,7 @@ fn neighbors(world: &World, pos: ChunkPos) -> [Option<&mv_world::Chunk>; 27] {
 mod tests;
 #[cfg(test)]
 mod tests_chem;
+#[cfg(test)]
+mod tests_integrity;
 #[cfg(test)]
 mod tests_thermal;

@@ -33,12 +33,15 @@ fn fixture() -> Fixture {
     }
     let stone = registry.id("stone").unwrap();
     fill_box(&mut world, w(-64, 0, -64), w(127, 0, 127), stone, |_| true);
+    let mut sim = Simulation::new(
+        &registry,
+        &ReactionSet::empty(&registry),
+        &SimConfig::default(),
+    );
+    // Not about structural integrity (tests_integrity.rs): nothing detaches.
+    sim.set_anchor(Some(Box::new(|_| true)));
     Fixture {
-        sim: Simulation::new(
-            &registry,
-            &ReactionSet::empty(&registry),
-            &SimConfig::default(),
-        ),
+        sim,
         world,
         registry,
     }

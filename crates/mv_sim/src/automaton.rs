@@ -106,6 +106,8 @@ pub struct TaskOut {
     pub heat: Vec<(usize, f32, f32)>,
     /// Chunk without a field: a product is unstable at ambient and needs one.
     pub needs_field: bool,
+    /// Cells where a solid disappeared (structural integrity must check them).
+    pub solid_lost: Aabb,
 }
 
 impl Default for Aabb {
@@ -399,6 +401,9 @@ impl Sweep<'_, '_> {
             return;
         }
         let table = self.ctx.table;
+        if table.get(old).kind == Kind::Static && table.get(new).kind != Kind::Static {
+            self.out.solid_lost.include(p);
+        }
         let (po, pn) = (table.thermal(old), table.thermal(new));
         match self.view.thermal.as_deref_mut() {
             Some(f) => self.out.imbalance += f.change_voxel(cell_of(p), po, pn, f32::INFINITY),

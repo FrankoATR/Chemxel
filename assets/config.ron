@@ -17,6 +17,10 @@
         transition_rate: 0.1,    // probability per tick of a phase change past its threshold
         transition_hysteresis: 2.0,
         thermal_epsilon: 0.5,    // °C from ambient where temperature fields sleep/grow
+        // Structural integrity: bigger (or wider) connected solids count as anchored.
+        integrity_max_voxels: 65536,
+        integrity_max_extent: 192,
+        integrity_budget_voxels: 262144,  // flood fill voxels per tick
     ),
     render: (
         vsync: true,
@@ -46,6 +50,7 @@
         ),
         unload_margin_chunks: 2,
         max_inflight_jobs: 64,
+        anchor_depth: 32,        // solids this far below the generated surface never fall
     ),
     controls: (
         fly_speed: 4.0,          // m/s
@@ -57,5 +62,16 @@
         max_brush_radius: 48.0,
         reach: 1024.0,
         repeat_hz: 12.0,
+    ),
+    physics: (
+        gravity: 9.81,           // m/s²
+        settle_speed: 0.05,      // m/s (and rad/s): slower than this for settle_ticks
+        settle_ticks: 15,        // ... puts a body back into the voxel grid
+        max_body_seconds: 20.0,
+        world_margin: 12,        // world voxels around a body that get a collider
+        max_bodies: 64,
+        max_body_voxels: 4194304,  // GPU storage for body voxels (2 bytes each)
+        friction: 0.7,
+        restitution: 0.05,
     ),
 )

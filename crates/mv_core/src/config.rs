@@ -39,6 +39,7 @@ pub struct Config {
     pub world: WorldConfig,
     pub controls: ControlsConfig,
     pub editor: EditorConfig,
+    pub physics: PhysicsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,6 +84,13 @@ pub struct SimConfig {
     /// A temperature field within this many °C of ambient everywhere may sleep, and
     /// neighbours get a field once a shared face deviates by more.
     pub thermal_epsilon: f32,
+    /// Structural integrity: a connected solid bigger than this (voxels) counts as
+    /// anchored without exploring further.
+    pub integrity_max_voxels: u32,
+    /// Same for the bounding box of the component, in voxels per axis.
+    pub integrity_max_extent: u32,
+    /// Voxels the integrity flood fill may visit per tick; pending checks wait.
+    pub integrity_budget_voxels: u32,
 }
 
 impl Default for SimConfig {
@@ -97,6 +105,48 @@ impl Default for SimConfig {
             transition_rate: 0.1,
             transition_hysteresis: 2.0,
             thermal_epsilon: 0.5,
+            integrity_max_voxels: 65_536,
+            integrity_max_extent: 192,
+            integrity_budget_voxels: 262_144,
+        }
+    }
+}
+
+/// Rigid bodies (milestone 6, ADR 009). Distances in microvoxels unless stated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PhysicsConfig {
+    /// Gravity, m/s².
+    pub gravity: f32,
+    /// A body slower than this (m/s and rad/s) for `settle_ticks` is put back into
+    /// the voxel grid.
+    pub settle_speed: f32,
+    pub settle_ticks: u32,
+    /// Bodies are put back after this many seconds no matter what.
+    pub max_body_seconds: f32,
+    /// World voxels around a body that get a collider, beyond its bounding box.
+    pub world_margin: u32,
+    /// Max bodies at once; further detached pieces are put back immediately.
+    pub max_bodies: u32,
+    /// GPU storage for body voxels (2 bytes each).
+    pub max_body_voxels: u32,
+    /// Friction and restitution of voxel contacts.
+    pub friction: f32,
+    pub restitution: f32,
+}
+
+impl Default for PhysicsConfig {
+    fn default() -> Self {
+        Self {
+            gravity: 9.81,
+            settle_speed: 0.05,
+            settle_ticks: 15,
+            max_body_seconds: 20.0,
+            world_margin: 12,
+            max_bodies: 64,
+            max_body_voxels: 4 << 20,
+            friction: 0.7,
+            restitution: 0.05,
         }
     }
 }
@@ -150,6 +200,9 @@ pub struct WorldConfig {
     pub unload_margin_chunks: u32,
     /// Max chunks being generated in the background at once.
     pub max_inflight_jobs: u32,
+    /// Solids deeper than this many voxels below the generated terrain surface are
+    /// anchored (structural integrity stops there).
+    pub anchor_depth: i32,
 }
 
 impl Default for WorldConfig {
@@ -159,6 +212,7 @@ impl Default for WorldConfig {
             terrain: TerrainConfig::default(),
             unload_margin_chunks: 2,
             max_inflight_jobs: 64,
+            anchor_depth: 32,
         }
     }
 }
@@ -358,6 +412,33 @@ impl Config {
         }
         if self.window.width == 0 || self.window.height == 0 {
             return invalid("window.width/height", "must be non-zero");
+        }
+        if sim.integrity_max_voxels == 0
+            || sim.integrity_max_extent == 0
+            || sim.integrity_budget_voxels < sim.integrity_max_voxels
+        {
+            return invalid(
+                "sim.integrity_*",
+                "max_voxels and max_extent must be > 0 and budget_voxels >= max_voxels",
+            );
+        }
+        if self.world.anchor_depth < 0 {
+            return invalid("world.anchor_depth", "must be >= 0");
+        }
+        let p = &self.physics;
+        if !(p.gravity.is_finite()
+            && p.settle_speed > 0.0
+            && p.max_body_seconds > 0.0
+            && p.friction >= 0.0
+            && (0.0..=1.0).contains(&p.restitution))
+        {
+            return invalid(
+                "physics.*",
+                "gravity finite, settle_speed and max_body_seconds > 0, friction >= 0, restitution in 0..=1",
+            );
+        }
+        if p.max_bodies == 0 || p.max_body_voxels == 0 {
+            return invalid("physics.max_bodies/max_body_voxels", "must be at least 1");
         }
         Ok(())
     }
