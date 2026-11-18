@@ -39,6 +39,12 @@ fn fixture(config: SimConfig) -> Fixture {
     }
     let stone = registry.id("stone").unwrap();
     fill_box(&mut world, w(-64, 0, -64), w(127, 0, 127), stone, |_| true);
+    // Exact flood fill: every floating piece detaches, however small (the minimum
+    // size has its own test).
+    let config = SimConfig {
+        integrity_min_voxels: config.integrity_min_voxels.min(1),
+        ..config
+    };
     Fixture {
         sim: Simulation::new(&registry, &ReactionSet::empty(&registry), &config),
         world,
@@ -171,6 +177,31 @@ fn powders_are_not_structural_and_fall_when_their_support_goes() {
 }
 
 #[test]
+fn crumbs_stay_in_place() {
+    let mut f = fixture(SimConfig::default());
+    f.sim = Simulation::new(
+        &f.registry,
+        &ReactionSet::empty(&f.registry),
+        &SimConfig {
+            integrity_min_voxels: 10,
+            ..SimConfig::default()
+        },
+    );
+    f.put(w(10, 1, 10), w(10, 9, 10), "stone"); // 9 voxels: a crumb
+    f.put(w(20, 1, 10), w(20, 12, 10), "stone"); // 12: a piece
+    f.dig(w(10, 1, 10), w(20, 1, 10));
+    f.run(1);
+    let bodies = f.sim.take_detached();
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0].count, 11);
+    assert_eq!(
+        f.count("stone", w(10, 2, 10), w(10, 9, 10)),
+        8,
+        "the crumb hangs on"
+    );
+}
+
+#[test]
 fn too_big_pieces_count_as_anchored() {
     let config = SimConfig {
         integrity_max_voxels: 100,
@@ -233,7 +264,8 @@ fn reactions_that_remove_solids_trigger_checks() {
     for (x, z) in [(9, 10), (11, 10), (10, 9), (10, 11)] {
         f.put(w(x, 1, z), w(x, 1, z), "acid");
     }
-    f.run(3);
+    // Natural removals are gathered and checked every `integrity_natural_period`.
+    f.run(SimConfig::default().integrity_natural_period + 2);
     let bodies = f.sim.take_detached();
     assert!(
         bodies.iter().any(|b| b.count >= 5 * 5 * 5),

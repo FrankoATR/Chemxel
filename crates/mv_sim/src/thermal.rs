@@ -356,7 +356,7 @@ pub struct TransitionOut {
     /// (sensible after − sensible before) + latent absorbed.
     pub imbalance: f64,
     /// Cells where a solid disappeared (melted, burnt).
-    pub solid_lost: Aabb,
+    pub solid_lost: Vec<IVec3>,
 }
 
 /// Directions a flame may be emitted in: up first, then the sides.
@@ -401,7 +401,7 @@ pub fn transitions(
             if let Some(into) = p.change_at(t, params.hysteresis) {
                 if rng::hash(params.seed ^ SALT_PHASE, params.tick, world) < params.rate {
                     if table.get(m).kind == Kind::Static && table.get(into).kind != Kind::Static {
-                        out.solid_lost.include(pi);
+                        out.solid_lost.push(pi);
                     }
                     out.imbalance += field.change_voxel(c, p, table.thermal(into), f32::INFINITY);
                     chunk.set(lp, into);
@@ -415,7 +415,7 @@ pub fn transitions(
             };
             if rng::hash(params.seed ^ SALT_BURN, params.tick, world) < burn.rate {
                 if table.get(m).kind == Kind::Static && table.get(burn.into).kind != Kind::Static {
-                    out.solid_lost.include(pi);
+                    out.solid_lost.push(pi);
                 }
                 out.imbalance += field.change_voxel(c, p, table.thermal(burn.into), burn.max_temp);
                 chunk.set(lp, burn.into);

@@ -7,11 +7,14 @@
 //! (a huge component is part of the terrain). Anything else is floating: it is cut
 //! out of the grid as a [`VoxelBody`] for the physics engine.
 //!
-//! The fill dives downwards first, so a piece standing on the ground finds its
-//! anchor in a few dozen steps. Visited sets are per-chunk bitsets and chunk lookups
+//! The fill is best-first by height: it always expands the lowest voxel found so
+//! far (breadth-first within a level), so it drops down the nearest support at
+//! once. A piece standing on the ground finds its anchor in a few dozen steps, and
+//! a canopy finds its trunk without wandering across touching canopies. Visited sets are per-chunk bitsets and chunk lookups
 //! are cached, so the hot loop does no hashing per voxel in the common case.
 
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 
 use glam::{I64Vec3, IVec3};
 use mv_core::{ChunkPos, LocalPos, WorldPos};
@@ -67,6 +70,8 @@ impl VoxelBody {
 /// Limits of the flood fill.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
+    /// Floating pieces smaller than this stay in place.
+    pub min_voxels: usize,
     pub max_voxels: usize,
     pub max_extent: i64,
     pub budget: usize,
@@ -160,15 +165,30 @@ enum Fill {
 }
 
 /// Pending checks and scratch memory of the integrity pass.
+/// Where to look for floating pieces.
+#[derive(Debug, Clone)]
+enum Check {
+    /// Every solid of a box (edits: a brush stroke is small).
+    Region(I64Vec3, I64Vec3),
+    /// The solid face neighbours of voxels that disappeared by themselves.
+    Points(Vec<I64Vec3>),
+}
+
 pub(crate) struct Integrity {
-    queue: VecDeque<(I64Vec3, I64Vec3)>,
+    queue: VecDeque<Check>,
+    /// Voxels where reactions, burning or melting removed a solid, checked together
+    /// every `natural_period` ticks.
+    natural: Vec<I64Vec3>,
+    natural_period: u32,
+    ticks: u32,
     limits: Limits,
     anchor: Option<Anchor>,
-    /// Voxels of anchored components found while processing the current region.
+    /// Voxels of anchored components found during the current pass.
     done: Bits,
     /// Voxels of the component being filled.
     cur: Bits,
-    stack: Vec<I64Vec3>,
+    /// Frontier of the fill: (height, insertion order, position), lowest first.
+    frontier: BinaryHeap<Reverse<(i64, u32, [i64; 3])>>,
     component: Vec<I64Vec3>,
     seeds: Vec<I64Vec3>,
 }
@@ -196,7 +216,7 @@ fn is_solid(table: &MaterialTable, m: MaterialId) -> bool {
     !m.is_air() && table.get(m).kind == Kind::Static
 }
 
-/// Neighbours in push order: down is pushed last so it is explored first.
+/// Face neighbours (the frontier orders them by height).
 const DIRS: [I64Vec3; 6] = [
     I64Vec3::Y,
     I64Vec3::X,
@@ -207,14 +227,17 @@ const DIRS: [I64Vec3; 6] = [
 ];
 
 impl Integrity {
-    pub fn new(limits: Limits) -> Self {
+    pub fn new(limits: Limits, natural_period: u32) -> Self {
         Self {
             queue: VecDeque::new(),
+            natural: Vec::new(),
+            natural_period: natural_period.max(1),
+            ticks: 0,
             limits,
             anchor: None,
             done: Bits::default(),
             cur: Bits::default(),
-            stack: Vec::new(),
+            frontier: BinaryHeap::new(),
             component: Vec::new(),
             seeds: Vec::new(),
         }
@@ -228,7 +251,7 @@ impl Integrity {
     pub fn push(&mut self, lo: I64Vec3, hi: I64Vec3) {
         let (lo, hi) = (lo.min(hi) - 1, lo.max(hi) + 1);
         // Merge with the last region if it overlaps (brush strokes repeat).
-        if let Some((l, h)) = self.queue.back_mut()
+        if let Some(Check::Region(l, h)) = self.queue.back_mut()
             && l.cmple(hi).all()
             && lo.cmple(*h).all()
             && (h.max(hi) - l.min(lo)).max_element() <= 128
@@ -237,11 +260,18 @@ impl Integrity {
             *h = h.max(hi);
             return;
         }
-        self.queue.push_back((lo, hi));
+        self.queue.push_back(Check::Region(lo, hi));
     }
 
+    /// Records a voxel where a solid disappeared by itself (fire, acid, melting).
+    /// They are checked together every `natural_period` ticks.
+    pub fn push_natural(&mut self, p: I64Vec3) {
+        self.natural.push(p);
+    }
+
+    /// Checks waiting (including gathered natural removals).
     pub fn pending(&self) -> usize {
-        self.queue.len()
+        self.queue.len() + usize::from(!self.natural.is_empty())
     }
 
     /// Processes queued regions within the voxel budget; floating components are
@@ -250,22 +280,44 @@ impl Integrity {
     pub fn run(&mut self, world: &mut World, table: &MaterialTable) -> Pass {
         let _span = tracing::trace_span!("integrity").entered();
         let mut pass = Pass::default();
+        self.ticks += 1;
+        if self.ticks.is_multiple_of(self.natural_period) && !self.natural.is_empty() {
+            let mut points = std::mem::take(&mut self.natural);
+            points.sort_unstable_by_key(|p| (p.z, p.y, p.x));
+            points.dedup();
+            self.queue.push_back(Check::Points(points));
+        }
         let mut budget = self.limits.budget;
-        while let Some((lo, hi)) = self.queue.pop_front() {
+        // Anchored voxels stay anchored for the whole pass: extraction only removes
+        // floating pieces. Sharing this between regions avoids refilling the same
+        // tree for every voxel the fire burns.
+        self.done.clear();
+        while let Some(check) = self.queue.pop_front() {
             if budget < self.limits.max_voxels {
-                self.queue.push_front((lo, hi));
+                self.queue.push_front(check);
                 break;
             }
-            self.done.clear();
-            // Seeds: the solids of the region.
             self.seeds.clear();
             let mut reader = Reader::new(world);
-            for z in lo.z..=hi.z {
-                for y in lo.y..=hi.y {
-                    for x in lo.x..=hi.x {
-                        let p = I64Vec3::new(x, y, z);
-                        if reader.get(p).is_some_and(|m| is_solid(table, m)) {
-                            self.seeds.push(p);
+            match &check {
+                Check::Region(lo, hi) => {
+                    for z in lo.z..=hi.z {
+                        for y in lo.y..=hi.y {
+                            for x in lo.x..=hi.x {
+                                let p = I64Vec3::new(x, y, z);
+                                if reader.get(p).is_some_and(|m| is_solid(table, m)) {
+                                    self.seeds.push(p);
+                                }
+                            }
+                        }
+                    }
+                }
+                Check::Points(points) => {
+                    for &p in points {
+                        for d in DIRS {
+                            if reader.get(p + d).is_some_and(|m| is_solid(table, m)) {
+                                self.seeds.push(p + d);
+                            }
                         }
                     }
                 }
@@ -277,8 +329,12 @@ impl Integrity {
                 {
                     continue;
                 }
-                let result = self.fill(world, table, p);
+                let mut result = self.fill(world, table, p);
                 let n = self.component.len();
+                if result == Fill::Floating && n < self.limits.min_voxels {
+                    // A crumb: not worth a rigid body, it stays where it is.
+                    result = Fill::Anchored;
+                }
                 budget = budget.saturating_sub(n);
                 pass.visited += n;
                 for i in 0..n {
@@ -298,14 +354,17 @@ impl Integrity {
 
     /// Flood fill from solid `seed` into `self.component`.
     fn fill(&mut self, world: &World, table: &MaterialTable, seed: I64Vec3) -> Fill {
-        self.stack.clear();
+        self.frontier.clear();
+        let mut order = 0u32;
         self.component.clear();
-        self.stack.push(seed);
+        self.frontier
+            .push(Reverse((seed.y, order, seed.to_array())));
         self.cur.set(seed, true);
         self.component.push(seed);
         let (mut bmin, mut bmax) = (seed, seed);
         let mut reader = Reader::new(world);
-        while let Some(p) = self.stack.pop() {
+        while let Some(Reverse((_, _, p))) = self.frontier.pop() {
+            let p = I64Vec3::from_array(p);
             if self.anchor.as_ref().is_some_and(|a| a(WorldPos(p))) {
                 return Fill::Anchored;
             }
@@ -329,7 +388,8 @@ impl Integrity {
                 {
                     return Fill::Anchored;
                 }
-                self.stack.push(q);
+                order = order.wrapping_add(1);
+                self.frontier.push(Reverse((q.y, order, q.to_array())));
             }
         }
         Fill::Floating

@@ -160,11 +160,15 @@ impl Simulation {
             transition_rate: config.transition_rate,
             diffusion_rate: config.diffusion_rate,
             energy_imbalance: 0.0,
-            integrity: integrity::Integrity::new(integrity::Limits {
-                max_voxels: config.integrity_max_voxels as usize,
-                max_extent: i64::from(config.integrity_max_extent),
-                budget: config.integrity_budget_voxels as usize,
-            }),
+            integrity: integrity::Integrity::new(
+                integrity::Limits {
+                    min_voxels: config.integrity_min_voxels as usize,
+                    max_voxels: config.integrity_max_voxels as usize,
+                    max_extent: i64::from(config.integrity_max_extent),
+                    budget: config.integrity_budget_voxels as usize,
+                },
+                config.integrity_natural_period,
+            ),
             detached: Vec::new(),
         }
     }
@@ -426,12 +430,9 @@ impl Simulation {
                 stats.moves += out.moves;
                 stats.reactions += out.reactions;
                 stats.decays += out.decays;
-                if !out.solid_lost.is_empty() {
-                    let origin = pos.origin().0;
-                    self.integrity.push(
-                        origin + out.solid_lost.min.as_i64vec3(),
-                        origin + out.solid_lost.max.as_i64vec3(),
-                    );
+                let origin = pos.origin().0;
+                for p in &out.solid_lost {
+                    self.integrity.push_natural(origin + p.as_i64vec3());
                 }
                 self.energy_imbalance += out.imbalance;
                 if out.needs_field || !out.heat.is_empty() {
@@ -484,9 +485,6 @@ impl Simulation {
     /// Structural integrity: cuts floating pieces out of the grid. Returns the voxels
     /// visited and the pieces detached.
     fn integrity_step(&mut self, world: &mut World) -> (u32, u32) {
-        if self.integrity.pending() == 0 {
-            return (0, 0);
-        }
         let table = Arc::clone(&self.table);
         let pass = self.integrity.run(world, &table);
         let detached = pass.bodies.len() as u32;
@@ -636,12 +634,9 @@ impl Simulation {
             self.energy_imbalance += out.imbalance;
             count += out.count;
             flames += out.flames;
-            if !out.solid_lost.is_empty() {
-                let origin = pos.origin().0;
-                self.integrity.push(
-                    origin + out.solid_lost.min.as_i64vec3(),
-                    origin + out.solid_lost.max.as_i64vec3(),
-                );
+            let origin = pos.origin().0;
+            for p in &out.solid_lost {
+                self.integrity.push_natural(origin + p.as_i64vec3());
             }
             if !out.changed.is_empty() {
                 world.mark_edited(pos);
@@ -797,7 +792,7 @@ impl Simulation {
                 if self.table.get(old).kind == Kind::Static
                     && self.table.get(new).kind != Kind::Static
                 {
-                    self.integrity.push(pos.0, pos.0);
+                    self.integrity.push_natural(pos.0);
                 }
             }
             self.voxel_changed(world, mv.src, mv.src_material, mv.src_into);

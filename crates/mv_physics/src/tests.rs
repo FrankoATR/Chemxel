@@ -43,11 +43,11 @@ fn fixture(physics: PhysicsConfig) -> Fixture {
     }
     let stone = registry.id("stone").unwrap();
     fill_box(&mut world, w(-64, -8, -64), w(127, 0, 127), stone, |_| true);
-    let mut sim = Simulation::new(
-        &registry,
-        &ReactionSet::empty(&registry),
-        &SimConfig::default(),
-    );
+    let config = SimConfig {
+        integrity_min_voxels: 1,
+        ..SimConfig::default()
+    };
+    let mut sim = Simulation::new(&registry, &ReactionSet::empty(&registry), &config);
     sim.set_anchor(Some(Box::new(|p: WorldPos| p.0.y <= 0)));
     Fixture {
         physics: Physics::new(&registry, &physics, DT),

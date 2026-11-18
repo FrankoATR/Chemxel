@@ -21,6 +21,8 @@
         integrity_max_voxels: 65536,
         integrity_max_extent: 192,
         integrity_budget_voxels: 262144,  // flood fill voxels per tick
+        integrity_min_voxels: 64,         // smaller floating pieces stay in place
+        integrity_natural_period: 8,      // ticks between checks of burnt/melted/eaten solids
     ),
     render: (
         vsync: true,

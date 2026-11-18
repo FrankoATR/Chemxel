@@ -91,6 +91,12 @@ pub struct SimConfig {
     pub integrity_max_extent: u32,
     /// Voxels the integrity flood fill may visit per tick; pending checks wait.
     pub integrity_budget_voxels: u32,
+    /// Floating pieces smaller than this stay in place instead of becoming rigid
+    /// bodies (crumbs left by fire or acid would otherwise flood the physics).
+    pub integrity_min_voxels: u32,
+    /// Solids lost to reactions, burning or melting are gathered and checked every
+    /// this many ticks (edits are checked at once).
+    pub integrity_natural_period: u32,
 }
 
 impl Default for SimConfig {
@@ -108,6 +114,8 @@ impl Default for SimConfig {
             integrity_max_voxels: 65_536,
             integrity_max_extent: 192,
             integrity_budget_voxels: 262_144,
+            integrity_min_voxels: 64,
+            integrity_natural_period: 8,
         }
     }
 }
@@ -426,6 +434,9 @@ impl Config {
                 "sim.integrity_*",
                 "max_voxels and max_extent must be > 0 and budget_voxels >= max_voxels",
             );
+        }
+        if sim.integrity_natural_period == 0 {
+            return invalid("sim.integrity_natural_period", "must be at least 1");
         }
         if self.world.anchor_depth < 0 {
             return invalid("world.anchor_depth", "must be >= 0");
