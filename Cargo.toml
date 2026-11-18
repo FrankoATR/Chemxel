@@ -40,6 +40,7 @@ tracing-tracy = "0.11"
 criterion = "0.8.2"
 rayon = "1.12.0"
 noise = "0.9.0"
+rapier3d = "0.36.1"
 egui = { version = "0.37.0", features = ["default_fonts"] }
 egui-wgpu = { version = "0.37.0", default-features = false }
 egui-winit = { version = "0.37.0", default-features = false, features = ["clipboard", "links", "wayland", "x11"] }

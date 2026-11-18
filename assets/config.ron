@@ -73,5 +73,6 @@
         max_body_voxels: 4194304,  // GPU storage for body voxels (2 bytes each)
         friction: 0.7,
         restitution: 0.05,
+        max_substeps: 16,        // per tick; bodies move <= half a voxel per substep
     ),
 )

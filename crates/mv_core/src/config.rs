@@ -133,6 +133,10 @@ pub struct PhysicsConfig {
     /// Friction and restitution of voxel contacts.
     pub friction: f32,
     pub restitution: f32,
+    /// Max physics substeps per tick. A tick is split so no body moves more than
+    /// half a voxel per substep (voxel colliders only touch at their surface), and
+    /// speeds are capped accordingly.
+    pub max_substeps: u32,
 }
 
 impl Default for PhysicsConfig {
@@ -147,6 +151,7 @@ impl Default for PhysicsConfig {
             max_body_voxels: 4 << 20,
             friction: 0.7,
             restitution: 0.05,
+            max_substeps: 16,
         }
     }
 }
@@ -436,6 +441,9 @@ impl Config {
                 "physics.*",
                 "gravity finite, settle_speed and max_body_seconds > 0, friction >= 0, restitution in 0..=1",
             );
+        }
+        if !(1..=64).contains(&p.max_substeps) {
+            return invalid("physics.max_substeps", "must be between 1 and 64");
         }
         if p.max_bodies == 0 || p.max_body_voxels == 0 {
             return invalid("physics.max_bodies/max_body_voxels", "must be at least 1");

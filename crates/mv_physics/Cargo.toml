@@ -8,6 +8,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+mv_core.workspace = true
+mv_materials.workspace = true
+mv_world.workspace = true
+mv_sim.workspace = true
+glam.workspace = true
+tracing.workspace = true
+rapier3d.workspace = true
 
 [lints]
 workspace = true

@@ -193,6 +193,12 @@ impl Simulation {
         self.edited(world, min, max, None);
     }
 
+    /// Like [`Simulation::voxels_placed`] but without an integrity check (a piece put
+    /// back where it was cut out, e.g. when there is no room for more bodies).
+    pub fn voxels_restored(&mut self, world: &World, min: WorldPos, max: WorldPos) {
+        self.edited(world, min, max, Some(MaterialId::AIR));
+    }
+
     pub fn ambient_temperature(&self) -> f32 {
         self.ambient
     }
