@@ -26,6 +26,7 @@ cargo run --release -- --bench-heat[=SECS]  # lo mismo en el juego, con la vista
 cargo bench -p mv_benches --bench sim_fire  # incendio de un bosque, sin ventana
 cargo run --release -- --bench-fire[=SECS]  # lo mismo en el juego
 cargo run --release -- --hot-reload         # recarga de RON también en release
+cargo run --release -- --bench-tower[=SECS] # torre con la base excavada (rígidos)
 ```
 
 Benchmarks siempre con el portátil enchufado: con batería los tiempos se multiplican
@@ -43,7 +44,7 @@ crates/
   mv_materials  registro de materiales y reacciones (RON)
   mv_world      Chunk 64³ por bricks, World (+colas), terrain, stream, raycast, edit, testgen
   mv_sim        simulación headless: autómata (3), temperatura (4), reacciones y fuego (5)
-  mv_physics    puente rapier3d                                          (hito 6)
+  mv_physics    cuerpos rígidos de vóxeles con rapier3d (hito 6)
   mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
   mv_game       binario: App (loop), GameWorld (streaming+subida), Editor, Gui/overlay egui,
                 FlyController, InputState, BenchFly
@@ -141,14 +142,46 @@ como editados en `World`, y así se suben a la GPU.
 - **Combustión:** en `thermal::transitions` (`ThermalProps::burn`), con emisión de llamas.
 - **Pérdida de calor:** `heat_loss` en `thermal::diffuse`.
 
+**Integridad estructural (`integrity.rs`, ADR 009):**
+- **Disparo:** cuando desaparece un sólido estático se encola una comprobación.
+  - Ediciones (`edited` con `placed = None`): cajas.
+  - Reacciones, combustión y fusión: puntos, procesados cada `integrity_natural_period`.
+- **Relleno:** 6-conexo, primero en altura, con bitsets por chunk.
+- **Anclado:** si llega al predicado `Anchor` (en el juego, `GameWorld::anchor`: bajo la
+  superficie generada menos `anchor_depth`), a un chunk sin cargar, o si supera
+  `integrity_max_voxels` / `integrity_max_extent`.
+- **Resultado:** lo flotante (≥ `integrity_min_voxels`) sale como `VoxelBody` por
+  `take_detached`.
+- **Devolver vóxeles:** `voxels_placed` (con comprobación) o `voxels_restored` (sin
+  ella).
+
 **Tests:**
 - `mv_sim/src/tests.rs`: reglas del autómata, en un mundo de 3×3×3 chunks con suelo de
   piedra.
+- `tests_integrity.rs`: relleno, anclas, límites, presupuesto, piezas por reacción.
+- `tests_thermal.rs` y `tests_chem.rs` fijan un ancla que lo ancla todo (no tratan de
+  integridad).
 - `tests_thermal.rs`: temperatura, con los materiales reales de `assets/materials`.
 - `tests_chem.rs`: reacciones (materiales sintéticos para reglas exactas y los reales),
   incendio del bosque y energía.
 
 Toda regla nueva lleva un test.
+
+### Física (`mv_physics`, ADR 009)
+
+- **Bucle:** `Physics::step(world, sim)` tras cada `Simulation::step`:
+  1. toma las piezas;
+  2. crea cuerpos rapier con colisionador `Voxels`;
+  3. reconstruye por cuerpo el colisionador estático del mundo cercano (grupos de
+     colisión para que solo toque a su cuerpo);
+  4. avanza en subpasos (≤ medio vóxel por subpaso);
+  5. revoxeliza los cuerpos quietos por mapeo inverso.
+- **Unidades:** rapier en metros (vóxel = 1/16 m), relativo a un origen de física.
+  `Physics::pose` da la pose en microvóxeles.
+- **Render:** `Renderer::set_bodies(&[BodyInstance])` cada frame. Los cuerpos se trazan
+  en `raymarch.wgsl` (bindings 8–9).
+- **Tests:** `mv_physics/src/tests.rs`, de principio a fin (torre de aceptación, viga que
+  vuelca, límite de cuerpos, caída en agua).
 
 ### Shaders
 

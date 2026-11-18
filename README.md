@@ -21,7 +21,7 @@ Minecraft (mundo por chunks, construcción).
 | 3 — Autómata celular | ✅ Completado |
 | 4 — Temperatura | ✅ Completado |
 | 5 — Reacciones y fuego | ✅ Completado |
-| 6 — Integridad y rígidos | ⬜ Pendiente |
+| 6 — Integridad y rígidos | ✅ Completado |
 | 7 — Iluminación | ⬜ Pendiente |
 | 8 — Jugador y guardado | ⬜ Pendiente |
 
@@ -33,8 +33,11 @@ montículos, el agua fluye y se nivela, los gases suben. El calor se difunde y v
 material: la lava funde el hielo, el agua hierve, el vapor sube y se condensa lejos, y la
 lava se solidifica en piedra al enfriarse (vista de calor con F5). Hay química: la lava
 que toca agua se apaga en obsidiana, el ácido disuelve la roca y el fuego se propaga por
-madera y hojas, sube en llamas, deja ceniza y humo, y se apaga con agua. Solo se simulan
-las zonas que cambian, en paralelo, a 30 Hz fijos y desacoplado del render. El render es raymarching en
+madera y hojas, sube en llamas, deja ceniza y humo, y se apaga con agua. Lo que queda
+suelto cae: al excavar la base de una torre, quemar un tronco o disolver un apoyo con
+ácido, la pieza se convierte en un cuerpo rígido (rapier3d) que cae, vuelca, choca y,
+al quedarse quieta, vuelve a formar parte del mundo. Solo se simulan las zonas que
+cambian, en paralelo, a 30 Hz fijos y desacoplado del render. El render es raymarching en
 GPU sobre brickmaps.
 
 Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~700 FPS volando a 20 m/s sobre el
@@ -77,6 +80,7 @@ cargo bench -p mv_benches --bench sim_thermal # temperatura: lava sobre hielo, s
 cargo run --release -- --bench-heat          # lo mismo en el juego, con la vista de calor
 cargo bench -p mv_benches --bench sim_fire    # incendio de un bosque 6×6, sin ventana
 cargo run --release -- --bench-fire          # lo mismo en el juego, sobre el terreno real
+cargo run --release -- --bench-tower         # torre con la base excavada (cuerpos rígidos)
 ```
 
 Para medir, el portátil debe estar enchufado: con batería la CPU baja de frecuencia y los
@@ -102,7 +106,9 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 - **Mundo:** semilla, nivel del mar, forma del terreno, margen de descarga, trabajos de
   generación en paralelo.
 - **Controles:** velocidad de la cámara, sensibilidad del ratón.
-- **Pincel:** radio inicial y máximo, alcance, repeticiones por segundo. Para medir FPS reales, pon
+- **Pincel:** radio inicial y máximo, alcance, repeticiones por segundo.
+- **Integridad y física:** tamaño mínimo y máximo de las piezas que caen, profundidad del
+  ancla bajo el terreno, gravedad, criterio de reposo, número máximo de cuerpos. Para medir FPS reales, pon
 `vsync: false`. Para usar otra carpeta de assets: variable de entorno `CHEMXEL_ASSETS_DIR`.
 
 ## Controles
@@ -117,7 +123,7 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 | `Click der.` (mantener) | Poner el material seleccionado (no pisa sólidos ni polvos) |
 | `Rueda` | Radio del pincel |
 | `1`–`9` | Material (también desde el overlay, con el ratón suelto) |
-| `F3` | Mostrar/ocultar el overlay de depuración (con los escenarios "Drop 100k sand + water", "Lava on ice" y "Forest fire") |
+| `F3` | Mostrar/ocultar el overlay de depuración (con los escenarios "Drop 100k sand + water", "Lava on ice", "Forest fire" y "Tower collapse") |
 | `P` | Pausar/reanudar la simulación |
 | `F5` | Vista de calor (azul frío · gris ambiente · amarillo 100 °C · naranja · blanco) |
 | `Esc` | Soltar el ratón; si ya está suelto, salir |
