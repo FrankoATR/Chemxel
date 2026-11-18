@@ -32,6 +32,9 @@ pub(crate) struct FrameUniform {
     pub volume_dims: [u32; 4],
     /// x: number of rigid bodies.
     pub bodies: [u32; 4],
+    /// x: sun shadow distance in voxels (0 = off), y: ambient occlusion strength
+    /// (0 = off).
+    pub lighting: [f32; 4],
 }
 
 #[derive(Debug)]

@@ -34,6 +34,11 @@
         upload_budget_kib: 8192,     // streamed data per frame; edits are never delayed
         heat_view_capacity: 1024,    // temperature fields shown by F5 (16 KiB each)
         fov_y_deg: 70.0,
+        // Lighting (ADR 010): sun shadows up to this distance (0 = off) and ambient
+        // occlusion (0 = off; also turns off the light emissive voxels cast around).
+        sun_direction: (0.55, 0.62, 0.32),
+        shadow_distance: 768.0,  // microvoxels (48 m)
+        ao_strength: 0.8,
     ),
     world: (
         sea_level: 0,

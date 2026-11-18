@@ -52,6 +52,28 @@ pub struct Renderer {
     /// Fog: distance where it starts and coefficient k (see `set_view_distance`).
     fog_start: f32,
     fog_k: f32,
+    lighting: Lighting,
+}
+
+/// Lighting quality settings (milestone 7, ADR 010).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lighting {
+    /// Direction towards the sun (normalised by the renderer).
+    pub sun_dir: Vec3,
+    /// Max length of shadow rays, in voxels (0 disables shadows).
+    pub shadow_distance: f32,
+    /// Ambient occlusion strength, 0..1 (0 disables it and the emissive glow).
+    pub ao_strength: f32,
+}
+
+impl Default for Lighting {
+    fn default() -> Self {
+        Self {
+            sun_dir: Vec3::new(0.55, 0.62, 0.32),
+            shadow_distance: 768.0,
+            ao_strength: 0.8,
+        }
+    }
 }
 
 impl Renderer {
@@ -74,9 +96,10 @@ impl Renderer {
             bodies,
             heat_view: false,
             ambient: 20.0,
-            sun_dir: Vec3::new(0.45, 0.8, 0.35).normalize(),
+            sun_dir: Lighting::default().sun_dir.normalize(),
             fog_start: 0.0,
             fog_k: 0.0,
+            lighting: Lighting::default(),
         }
     }
 
@@ -109,12 +132,22 @@ impl Renderer {
     }
 
     /// Distance in microvoxels at which fog fully hides the scene (the edge of the
-    /// loaded world). Fog starts at 35% of it.
+    /// loaded world). Fog starts at half of it.
     pub fn set_view_distance(&mut self, voxels: f32) {
         // 1 - exp(-((t - start) * k)^2) reaches ~0.97 at t = distance.
-        self.fog_start = 0.35 * voxels;
+        self.fog_start = 0.5 * voxels;
         let span = voxels - self.fog_start;
         self.fog_k = if span > 0.0 { 1.9 / span } else { 0.0 };
+    }
+
+    /// Sets the sun direction and the shadow / ambient occlusion quality.
+    pub fn set_lighting(&mut self, lighting: Lighting) {
+        self.lighting = lighting;
+        self.sun_dir = lighting.sun_dir.try_normalize().unwrap_or(Vec3::Y);
+    }
+
+    pub fn lighting(&self) -> Lighting {
+        self.lighting
     }
 
     /// Enables the heat-map view. While on, call `upload_heat` each frame.
@@ -243,6 +276,12 @@ impl Renderer {
             fog: [self.fog_k, self.fog_start, self.ambient, 0.0],
             volume_dims: [dims.x, dims.y, dims.z, u32::from(self.heat_view)],
             bodies: [self.bodies.count(), 0, 0, 0],
+            lighting: [
+                self.lighting.shadow_distance.max(0.0),
+                self.lighting.ao_strength.clamp(0.0, 1.0),
+                0.0,
+                0.0,
+            ],
         }
     }
 }

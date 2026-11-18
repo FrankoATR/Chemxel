@@ -20,8 +20,26 @@ fn aces(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+// Part of a pixel's HDR colour that "glows" (above 1).
+fn bright(p: vec2<i32>, size: vec2<i32>) -> vec3<f32> {
+    let c = textureLoad(source, clamp(p, vec2<i32>(0), size - 1), 0).rgb;
+    return max(c - vec3<f32>(1.0), vec3<f32>(0.0));
+}
+
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let hdr = textureLoad(source, vec2<i32>(position.xy), 0).rgb;
-    return vec4<f32>(aces(hdr * 1.1), 1.0);
+    let p = vec2<i32>(position.xy);
+    let size = vec2<i32>(textureDimensions(source));
+    let hdr = textureLoad(source, p, 0).rgb;
+    // Cheap bloom: the bright excess of two rings of neighbours makes lava and fire
+    // glow (milestone 7).
+    var glow = vec3<f32>(0.0);
+    for (var i = 0; i < 8; i++) {
+        let a = f32(i) * 0.785398;
+        let d = vec2<f32>(cos(a), sin(a));
+        glow += bright(p + vec2<i32>(d * 3.0), size) * 0.6;
+        glow += bright(p + vec2<i32>(d * 9.0), size) * 0.4;
+    }
+    let color = hdr + glow * (0.18 / 8.0);
+    return vec4<f32>(aces(color * 1.1), 1.0);
 }

@@ -43,7 +43,7 @@ pub const MAX_MATERIALS: usize = 4096;
 pub struct MaterialGpu {
     /// Linear RGB + alpha.
     pub color: [f32; 4],
-    /// x: emissive intensity; yzw reserved.
+    /// x: emissive intensity; y: 1 for liquids (Fresnel sky reflection); zw reserved.
     pub params: [f32; 4],
 }
 

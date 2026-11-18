@@ -183,6 +183,13 @@ pub struct RenderConfig {
     pub heat_view_capacity: u32,
     /// Vertical field of view in degrees.
     pub fov_y_deg: f32,
+    /// Direction towards the sun (any length).
+    pub sun_direction: [f32; 3],
+    /// Max length of sun shadow rays, in microvoxels (0 disables shadows).
+    pub shadow_distance: f32,
+    /// Ambient occlusion strength, 0..1 (0 disables it, and the light emissive
+    /// voxels cast around them).
+    pub ao_strength: f32,
 }
 
 impl Default for RenderConfig {
@@ -196,6 +203,9 @@ impl Default for RenderConfig {
             upload_budget_kib: 8192,
             heat_view_capacity: 1024,
             fov_y_deg: 70.0,
+            sun_direction: [0.55, 0.62, 0.32],
+            shadow_distance: 768.0,
+            ao_strength: 0.8,
         }
     }
 }
@@ -386,6 +396,15 @@ impl Config {
             return invalid(
                 "sim.thermal_epsilon/transition_hysteresis",
                 "epsilon must be > 0 and hysteresis >= 0",
+            );
+        }
+        let r = &self.render;
+        if !(r.shadow_distance >= 0.0 && (0.0..=1.0).contains(&r.ao_strength))
+            || r.sun_direction.iter().all(|&c| c == 0.0)
+        {
+            return invalid(
+                "render.shadow_distance/ao_strength/sun_direction",
+                "shadow_distance >= 0, ao_strength in 0..=1, sun_direction non-zero",
             );
         }
         if self.render.chunk_slot_capacity == 0 {

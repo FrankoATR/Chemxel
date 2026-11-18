@@ -5,7 +5,7 @@
 //   chunk_grid[c]                     entry for chunk cell c of the window
 //   chunk_bricks[slot * 512 + b]      entry for brick b of the chunk at `slot`
 //   brick_pool[brick * 256 + i / 2]   two u16 material ids per u32 (low half = even i)
-//   materials[id]                     linear colour + emissive
+//   materials[id]                     linear colour + alpha, emissive, liquid flag
 // Grid and table entries: EMPTY (air), UNIFORM_BIT | material (whole chunk/brick is
 // one material), or a slot index into the next level.
 // Index orders are always x-fastest: x + y*N + z*N*N.
@@ -15,6 +15,12 @@
 // (rows), the position and the size + voxel offset of a dense grid stored in
 // body_voxels (two u16 per u32). They are traced after the world; the nearest hit
 // wins.
+//
+// Lighting (milestone 7, ADR 010): sun shadows (a second ray towards the sun),
+// ambient occlusion at two scales (per-corner occupancy of the hit face, plus short
+// rays that also gather light from emissive voxels), self-lit emissives, one layer
+// of transparency (water, steam, glass...) with absorption by thickness and a
+// Fresnel sky reflection on liquids, and fog tinted towards the sun.
 
 const EMPTY: u32 = 0xffffffffu;
 const UNIFORM_BIT: u32 = 0x80000000u;
@@ -22,6 +28,9 @@ const BRICK: i32 = 8;
 const BRICKS_PER_CHUNK_AXIS: i32 = 8;
 const CHUNK: i32 = 64;
 const MAX_CHUNK_STEPS: u32 = 512u;
+const FAR: f32 = 1e30;
+/// Materials with alpha below this are translucent.
+const OPAQUE_ALPHA: f32 = 0.98;
 
 struct Frame {
     camera_pos: vec4<f32>,  // xyz: eye position relative to the volume origin
@@ -35,6 +44,20 @@ struct Frame {
     fog: vec4<f32>,         // x: k, y: start s in 1 - exp(-((t - s) * k)^2), z: ambient °C
     volume_dims: vec4<u32>, // xyz: volume size in chunks, w: flags (bit 0: heat view)
     bodies: vec4<u32>,      // x: number of rigid bodies
+    lighting: vec4<f32>,    // x: shadow distance (0 = off), y: AO strength (0 = off)
+};
+
+struct Material {
+    color: vec4<f32>,  // linear rgb + alpha
+    params: vec4<f32>, // x: emissive, y: 1 for liquids (Fresnel reflection)
+};
+
+struct Hit {
+    found: bool,
+    t: f32,
+    material: u32,
+    axis: i32,        // axis of the face that was hit (0 = x, 1 = y, 2 = z)
+    voxel: vec3<i32>,
 };
 
 struct Body {
@@ -53,17 +76,15 @@ struct BodyHit {
     seed: vec3<i32>,      // for the per-voxel colour variation
 };
 
-struct Material {
-    color: vec4<f32>,  // linear rgb + alpha
-    params: vec4<f32>, // x: emissive
-};
-
-struct Hit {
+/// What a ray found, world or body, ready to shade.
+struct Surface {
     found: bool,
     t: f32,
     material: u32,
-    axis: i32,        // axis of the face that was hit (0 = x, 1 = y, 2 = z)
-    voxel: vec3<i32>,
+    normal: vec3<f32>,
+    voxel: vec3<i32>,     // world voxel (meaningless for bodies)
+    seed: vec3<i32>,
+    is_body: bool,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -99,9 +120,40 @@ fn min_axis(v: vec3<f32>) -> i32 {
     return 2;
 }
 
-// Voxel-level DDA inside one 8³ brick, starting at ray parameter t_start.
+// Material at voxel `v` (volume-relative); air outside the window.
+fn voxel_at(v: vec3<i32>) -> u32 {
+    let dims = vec3<i32>(frame.volume_dims.xyz);
+    if any(v < vec3<i32>(0)) || any(v >= dims * CHUNK) {
+        return 0u;
+    }
+    let c = v / CHUNK;
+    let entry = chunk_grid[c.x + c.y * dims.x + c.z * dims.x * dims.y];
+    if entry == EMPTY {
+        return 0u;
+    }
+    if (entry & UNIFORM_BIT) != 0u {
+        return entry & 0xffffu;
+    }
+    let l = v - c * CHUNK;
+    let b = l / BRICK;
+    let be = chunk_bricks[entry * 512u + u32(b.x + b.y * 8 + b.z * 64)];
+    if be == EMPTY {
+        return 0u;
+    }
+    if (be & UNIFORM_BIT) != 0u {
+        return be & 0xffffu;
+    }
+    return voxel_material(be, l - b * BRICK);
+}
+
+fn is_opaque(m: u32) -> bool {
+    return m != 0u && materials[m].color.a >= OPAQUE_ALPHA;
+}
+
+// Voxel-level DDA inside one 8³ brick, starting at ray parameter t_start. Voxels of
+// material `skip` count as empty.
 fn trace_brick(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
-               t_start: f32, bmin: vec3<i32>, brick: u32, entry_axis: i32) -> Hit {
+               t_start: f32, bmin: vec3<i32>, brick: u32, entry_axis: i32, skip: u32) -> Hit {
     let bmax = bmin + vec3<i32>(BRICK - 1);
     let p = ro + rd * t_start;
     var v = clamp(vec3<i32>(floor(p)), bmin, bmax);
@@ -111,7 +163,7 @@ fn trace_brick(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
     var t = t_start;
     for (var i = 0; i < 3 * BRICK; i++) {
         let m = voxel_material(brick, v - bmin);
-        if m != 0u {
+        if m != 0u && m != skip {
             return Hit(true, t, m, axis, v);
         }
         axis = min_axis(t_max);
@@ -128,7 +180,8 @@ fn trace_brick(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
 // Brick-level DDA inside one non-uniform chunk, starting at ray parameter t_start.
 // `cmin` is the chunk's minimum corner in voxels, `slot` its brick table.
 fn trace_chunk(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
-               t_start: f32, t_exit: f32, cmin: vec3<i32>, slot: u32, entry_axis: i32) -> Hit {
+               t_start: f32, t_exit: f32, cmin: vec3<i32>, slot: u32, entry_axis: i32,
+               skip: u32) -> Hit {
     let gmin = cmin / BRICK;
     let p = ro + rd * t_start;
     var b = clamp(vec3<i32>(floor(p / f32(BRICK))) - gmin, vec3<i32>(0),
@@ -144,13 +197,16 @@ fn trace_chunk(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
         if entry != EMPTY {
             let bmin = (gmin + b) * BRICK;
             if (entry & UNIFORM_BIT) != 0u {
-                // Solid uniform brick: the entry point is the hit.
-                let v = clamp(vec3<i32>(floor(ro + rd * t)), bmin, bmin + vec3<i32>(BRICK - 1));
-                return Hit(true, t, entry & 0xffffu, axis, v);
-            }
-            let hit = trace_brick(ro, rd, inv, step, t, bmin, entry, axis);
-            if hit.found {
-                return hit;
+                if (entry & 0xffffu) != skip {
+                    // Solid uniform brick: the entry point is the hit.
+                    let v = clamp(vec3<i32>(floor(ro + rd * t)), bmin, bmin + vec3<i32>(BRICK - 1));
+                    return Hit(true, t, entry & 0xffffu, axis, v);
+                }
+            } else {
+                let hit = trace_brick(ro, rd, inv, step, t, bmin, entry, axis, skip);
+                if hit.found {
+                    return hit;
+                }
             }
         }
         axis = min_axis(t_max);
@@ -168,8 +224,9 @@ fn trace_chunk(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
 }
 
 // Chunk-level DDA over the window: empty chunks are skipped in one step, uniform
-// chunks hit immediately, the rest descend to bricks and then voxels.
-fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
+// chunks hit immediately, the rest descend to bricks and then voxels. Voxels of
+// `skip` count as empty; the search stops beyond `t_limit`.
+fn trace(ro: vec3<f32>, rd_in: vec3<f32>, skip: u32, t_limit: f32) -> Hit {
     // Avoid divisions by zero for axis-aligned rays.
     let eps = 1e-8;
     let rd = select(rd_in, vec3<f32>(eps), abs(rd_in) < vec3<f32>(eps));
@@ -182,7 +239,7 @@ fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
     let t_near = min(t0, t1);
     let t_far = max(t0, t1);
     let t_enter = max(max(t_near.x, t_near.y), max(t_near.z, 0.0));
-    let t_exit = min(min(t_far.x, t_far.y), t_far.z);
+    let t_exit = min(min(min(t_far.x, t_far.y), t_far.z), t_limit);
     if t_enter >= t_exit {
         return no_hit();
     }
@@ -208,12 +265,15 @@ fn trace(ro: vec3<f32>, rd_in: vec3<f32>) -> Hit {
         if entry != EMPTY {
             let cmin = c * CHUNK;
             if (entry & UNIFORM_BIT) != 0u {
-                let v = clamp(vec3<i32>(floor(ro + rd * t)), cmin, cmin + vec3<i32>(CHUNK - 1));
-                return Hit(true, t, entry & 0xffffu, axis, v);
-            }
-            let hit = trace_chunk(ro, rd, inv, step, t, t_exit, cmin, entry, axis);
-            if hit.found {
-                return hit;
+                if (entry & 0xffffu) != skip {
+                    let v = clamp(vec3<i32>(floor(ro + rd * t)), cmin, cmin + vec3<i32>(CHUNK - 1));
+                    return Hit(true, t, entry & 0xffffu, axis, v);
+                }
+            } else {
+                let hit = trace_chunk(ro, rd, inv, step, t, t_exit, cmin, entry, axis, skip);
+                if hit.found {
+                    return hit;
+                }
             }
         }
         axis = min_axis(t_max);
@@ -294,6 +354,21 @@ fn trace_bodies(ro: vec3<f32>, rd: vec3<f32>, t_best: f32) -> BodyHit {
     return best;
 }
 
+// Nearest world or body surface along the ray (world voxels of `skip` ignored).
+fn find_surface(ro: vec3<f32>, rd: vec3<f32>, skip: u32, t_limit: f32) -> Surface {
+    let hit = trace(ro, rd, skip, t_limit);
+    let body = trace_bodies(ro, rd, select(t_limit, hit.t, hit.found));
+    if body.found {
+        return Surface(true, body.t, body.material, body.normal, vec3<i32>(0), body.seed, true);
+    }
+    if hit.found {
+        var n = vec3<f32>(0.0);
+        n[hit.axis] = -sign(rd[hit.axis]);
+        return Surface(true, hit.t, hit.material, n, hit.voxel, hit.voxel, false);
+    }
+    return Surface(false, FAR, 0u, vec3<f32>(0.0), vec3<i32>(0), vec3<i32>(0), false);
+}
+
 fn hash3(p: vec3<i32>) -> f32 {
     // WGSL forbids mixing bitwise and arithmetic operators without parentheses.
     var h = (u32(p.x) * 73856093u) ^ (u32(p.y) * 19349663u) ^ (u32(p.z) * 83492791u);
@@ -327,14 +402,190 @@ fn heat_color(t: f32, ambient: f32) -> vec3<f32> {
     return mix(vec3<f32>(1.0, 0.3, 0.02), vec3<f32>(1.0), clamp((t - 600.0) / 900.0, 0.0, 1.0));
 }
 
+const SUN_COLOR: vec3<f32> = vec3<f32>(1.0, 0.92, 0.78);
+
 fn sky(rd: vec3<f32>) -> vec3<f32> {
     let horizon = vec3<f32>(0.62, 0.74, 0.88);
     let zenith = vec3<f32>(0.18, 0.36, 0.72);
     let ground = vec3<f32>(0.22, 0.22, 0.24);
+    var c: vec3<f32>;
     if rd.y < 0.0 {
-        return mix(horizon, ground, min(-rd.y * 4.0, 1.0));
+        c = mix(horizon, ground, min(-rd.y * 4.0, 1.0));
+    } else {
+        c = mix(horizon, zenith, pow(rd.y, 0.6));
     }
-    return mix(horizon, zenith, pow(rd.y, 0.6));
+    // Warm glow around the sun.
+    let s = max(dot(rd, frame.sun_dir.xyz), 0.0);
+    return c + SUN_COLOR * (0.25 * pow(s, 8.0));
+}
+
+fn sky_with_sun(rd: vec3<f32>) -> vec3<f32> {
+    let s = dot(rd, frame.sun_dir.xyz);
+    return sky(rd) + SUN_COLOR * 20.0 * smoothstep(0.9994, 0.9998, s);
+}
+
+// Fraction of sunlight reaching `p` (just above a surface with normal `n`).
+fn sun_visibility(p: vec3<f32>, n: vec3<f32>) -> f32 {
+    let dist = frame.lighting.x;
+    if dist <= 0.0 || dot(n, frame.sun_dir.xyz) <= 0.0 {
+        return 1.0;
+    }
+    let o = p + n * 0.02;
+    let sd = frame.sun_dir.xyz;
+    var hit = trace(o, sd, 0u, dist);
+    var light = 1.0;
+    // Translucent material lets some light through; look past it once.
+    if hit.found && !is_opaque(hit.material) {
+        light = 1.0 - materials[hit.material].color.a * 0.6;
+        hit = trace(o, sd, hit.material, dist);
+    }
+    if hit.found {
+        return 0.0;
+    }
+    if trace_bodies(o, sd, dist).found {
+        return 0.0;
+    }
+    return light;
+}
+
+// Smooth voxel-scale ambient occlusion of the face of voxel `v` with normal `n` at
+// point `p`: occupancy of the 8 voxels around the face, interpolated per corner.
+fn corner_ao(v: vec3<i32>, n: vec3<f32>, p: vec3<f32>) -> f32 {
+    let ni = vec3<i32>(round(n));
+    var u = vec3<i32>(0, 1, 0);
+    var w = vec3<i32>(0, 0, 1);
+    if ni.y != 0 {
+        u = vec3<i32>(1, 0, 0);
+    } else if ni.z != 0 {
+        u = vec3<i32>(1, 0, 0);
+        w = vec3<i32>(0, 1, 0);
+    }
+    let base = v + ni;
+    var occ: array<f32, 9>;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            occ[(j + 1) * 3 + (i + 1)] = select(0.0, 1.0, is_opaque(voxel_at(base + u * i + w * j)));
+        }
+    }
+    // Position inside the face, 0..1 along u and w.
+    let f = p - vec3<f32>(v);
+    let fu = clamp(dot(f, vec3<f32>(u)), 0.0, 1.0);
+    let fw = clamp(dot(f, vec3<f32>(w)), 0.0, 1.0);
+    // Corner value: 0 occluders -> 1, both sides -> 0.25.
+    var c: array<f32, 4>;
+    for (var k = 0; k < 4; k++) {
+        let su = select(-1, 1, (k & 1) != 0);
+        let sw = select(-1, 1, (k & 2) != 0);
+        let side1 = occ[4 + su];
+        let side2 = occ[4 + sw * 3];
+        let corner = occ[4 + su + sw * 3];
+        let blocked = select(side1 + side2 + corner, 3.0, side1 + side2 >= 2.0);
+        c[k] = 1.0 - blocked * 0.25;
+    }
+    return mix(mix(c[0], c[1], fu), mix(c[2], c[3], fu), fw);
+}
+
+struct Ambient {
+    occlusion: f32,       // 1 = open sky, 0 = enclosed
+    glow: vec3<f32>,      // light gathered from emissive voxels nearby
+};
+
+// Larger-scale occlusion with short rays sampled at a few distances. Samples that
+// land in emissive voxels add their light (lava lights up its surroundings).
+fn ray_ambient(p: vec3<f32>, n: vec3<f32>) -> Ambient {
+    var a = Ambient(1.0, vec3<f32>(0.0));
+    let strength = frame.lighting.y;
+    if strength <= 0.0 {
+        return a;
+    }
+    // Tangent frame around the normal.
+    let helper = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.5);
+    let t1 = normalize(helper - n * dot(n, helper));
+    let t2 = cross(n, t1);
+    let dirs = array<vec3<f32>, 5>(
+        n,
+        normalize(n + t1 * 0.9),
+        normalize(n - t1 * 0.9),
+        normalize(n + t2 * 0.9),
+        normalize(n - t2 * 0.9),
+    );
+    let dists = array<f32, 4>(2.5, 5.0, 9.0, 15.0);
+    var occluded = 0.0;
+    for (var r = 0; r < 5; r++) {
+        for (var s = 0; s < 4; s++) {
+            let q = p + n * 0.5 + dirs[r] * dists[s];
+            let m = voxel_at(vec3<i32>(floor(q)));
+            if m != 0u {
+                let mat = materials[m];
+                let fall = 1.0 - f32(s) * 0.22;
+                if mat.params.x > 0.0 {
+                    a.glow += mat.color.rgb * mat.params.x * fall * 0.25;
+                }
+                if mat.color.a >= OPAQUE_ALPHA {
+                    occluded += fall;
+                    break;
+                }
+            }
+        }
+    }
+    a.occlusion = 1.0 - strength * occluded / 5.0;
+    return a;
+}
+
+// Lit colour of a surface hit at distance `t` along `rd` from `ro`.
+fn shade(s: Surface, ro: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
+    let mat = materials[s.material];
+    let p = ro + rd * s.t;
+    let n = s.normal;
+    // Per-voxel brightness noise gives surfaces texture at the voxel scale.
+    let variation = 0.84 + 0.18 * hash3(s.seed);
+    let base = mat.color.rgb * variation;
+    let emissive = mat.params.x;
+    if emissive > 0.0 {
+        // Self-lit: no shadows, glows into the HDR buffer.
+        return base * (0.5 + emissive * 0.35);
+    }
+    var ao = 1.0;
+    var glow = vec3<f32>(0.0);
+    if frame.lighting.y > 0.0 {
+        if !s.is_body {
+            ao = corner_ao(s.voxel, n, p);
+        }
+        let amb = ray_ambient(p, n);
+        ao *= amb.occlusion;
+        glow = amb.glow;
+    }
+    let sun = max(dot(n, frame.sun_dir.xyz), 0.0) * sun_visibility(p, n);
+    // Sky light from above, a little bounce from below.
+    let sky_light = mix(vec3<f32>(0.16, 0.16, 0.18), vec3<f32>(0.34, 0.42, 0.56), n.y * 0.5 + 0.5);
+    return base * (sky_light * ao + SUN_COLOR * 0.85 * sun + glow);
+}
+
+// Distance the ray travels through contiguous voxels of material `m`, starting at
+// `p` (just inside the first one), up to `max_steps` voxels.
+fn material_run(p: vec3<f32>, rd_in: vec3<f32>, m: u32, max_steps: i32) -> f32 {
+    let rd = select(rd_in, vec3<f32>(1e-8), abs(rd_in) < vec3<f32>(1e-8));
+    let inv = 1.0 / rd;
+    let step = vec3<i32>(sign(rd));
+    var v = vec3<i32>(floor(p));
+    let delta = abs(inv);
+    var t_max = (vec3<f32>(v) + select(vec3<f32>(0.0), vec3<f32>(1.0), rd > vec3<f32>(0.0)) - p) * inv;
+    var t = 0.0;
+    for (var i = 0; i < max_steps; i++) {
+        let axis = min_axis(t_max);
+        t = t_max[axis];
+        t_max[axis] += delta[axis];
+        v[axis] += step[axis];
+        if voxel_at(v) != m {
+            return t;
+        }
+    }
+    return t;
+}
+
+fn apply_fog(color: vec3<f32>, rd: vec3<f32>, t: f32) -> vec3<f32> {
+    let ft = max(t - frame.fog.y, 0.0) * frame.fog.x;
+    return mix(color, sky(rd), 1.0 - exp(-ft * ft));
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -352,48 +603,50 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         + ndc.y * tan_half * frame.up.xyz);
     let ro = frame.camera_pos.xyz;
 
-    var color = sky(rd);
-    let hit = trace(ro, rd);
-    let body = trace_bodies(ro, rd, select(1e30, hit.t, hit.found));
-    if hit.found || body.found {
-        var normal = vec3<f32>(0.0);
-        var material = hit.material;
-        var seed = hit.voxel;
-        var t = hit.t;
-        if body.found {
-            normal = body.normal;
-            material = body.material;
-            seed = body.seed;
-            t = body.t;
-        } else {
-            normal[hit.axis] = -sign(rd[hit.axis]);
+    var color = sky_with_sun(rd);
+    let s = find_surface(ro, rd, 0u, FAR);
+    if s.found {
+        let mat = materials[s.material];
+        color = shade(s, ro, rd);
+
+        // One layer of transparency: look past the translucent material and blend by
+        // the thickness crossed (Beer-Lambert), plus a sky reflection on liquids.
+        if mat.color.a < OPAQUE_ALPHA && !s.is_body {
+            let p = ro + rd * (s.t + 1e-3);
+            // Absorption only over the material itself (a droplet is thin even if the
+            // ground behind it is far), the colour from whatever is behind.
+            let thickness = material_run(p, rd, s.material, 64);
+            let behind = find_surface(p, rd, s.material, FAR);
+            var back = sky(rd);
+            if behind.found {
+                back = shade(behind, p, rd);
+            }
+            // Alpha is the opacity of ~8 voxels of the material.
+            let k = -log(max(1.0 - mat.color.a, 0.02)) / 8.0;
+            let transmit = exp(-k * thickness);
+            color = mix(color, back, transmit);
+            if mat.params.y > 0.0 {
+                let cos_i = clamp(-dot(rd, s.normal), 0.0, 1.0);
+                let fresnel = 0.02 + 0.98 * pow(1.0 - cos_i, 5.0);
+                color = mix(color, sky(reflect(rd, s.normal)), fresnel * 0.8);
+            }
         }
-        let mat = materials[material];
 
-        // Fixed per-face ambient makes voxel edges readable before real lighting:
-        // 1.0 on top faces, 0.88 on sides, 0.72 below (smooth for rotated bodies).
-        let face_ambient = select(0.88 + 0.16 * normal.y, 0.88 + 0.12 * normal.y, normal.y > 0.0);
-        let diffuse = max(dot(normal, frame.sun_dir.xyz), 0.0);
-        let variation = 0.9 + 0.1 * hash3(seed);
-        let base = mat.color.rgb * variation;
-        color = base * (0.35 * face_ambient + 0.75 * diffuse) + base * mat.params.x * 0.6;
-
-        if !body.found && (frame.volume_dims.w & 1u) != 0u {
-            let heat = heat_color(temperature_at(hit.voxel), frame.fog.z);
-            color = heat * (0.55 + 0.45 * face_ambient) * 2.0;
+        if !s.is_body && (frame.volume_dims.w & 1u) != 0u {
+            let face = 0.88 + 0.12 * s.normal.y;
+            let heat = heat_color(temperature_at(s.voxel), frame.fog.z);
+            color = heat * (0.55 + 0.45 * face) * 2.0;
         }
 
         // Brush preview: tint voxels inside the brush sphere.
-        if !body.found && frame.brush.w > 0.0 {
-            let d = vec3<f32>(hit.voxel) + 0.5 - frame.brush.xyz;
+        if !s.is_body && frame.brush.w > 0.0 {
+            let d = vec3<f32>(s.voxel) + 0.5 - frame.brush.xyz;
             if dot(d, d) <= frame.brush.w * frame.brush.w {
                 color = mix(color, vec3<f32>(1.0, 0.85, 0.3), 0.35);
             }
         }
 
-        // Distance fog, fully opaque near the edge of the render distance.
-        let ft = max(t - frame.fog.y, 0.0) * frame.fog.x;
-        color = mix(color, sky(rd), 1.0 - exp(-ft * ft));
+        color = apply_fog(color, rd, s.t);
     }
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(color, 1.0));
 }

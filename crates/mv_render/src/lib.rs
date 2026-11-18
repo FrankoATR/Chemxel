@@ -22,7 +22,7 @@ pub use gpu_volume::{
     VolumeDesc, VolumeStats,
 };
 pub use heat::HeatField;
-pub use renderer::{BrushPreview, FrameStats, OverlayTarget, Renderer};
+pub use renderer::{BrushPreview, FrameStats, Lighting, OverlayTarget, Renderer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
