@@ -26,6 +26,9 @@ use rapier3d::prelude as rp;
 const VOXEL: f32 = 1.0 / VOXELS_PER_BLOCK as f32;
 /// Collision group shared by every body (bodies collide with each other).
 const BODIES: u32 = 1;
+/// Ticks after which a body's world collider is rebuilt even if the body stayed in
+/// its region (the world may have changed around it).
+const REBUILD_PERIOD: u32 = 60;
 /// Max distance a body moves per substep, in metres (half a voxel).
 const MAX_STEP: f32 = 0.5 * VOXEL;
 
@@ -68,6 +71,8 @@ pub struct PhysicsStats {
     pub rebuilds: u32,
     /// Physics substeps in the last tick.
     pub substeps: u32,
+    /// Wall time of the last step, in milliseconds.
+    pub step_ms: f32,
 }
 
 pub struct Physics {
@@ -163,6 +168,12 @@ impl Physics {
     /// Takes the pieces the simulation cut out, steps the bodies, and puts settled
     /// ones back into the grid.
     pub fn step(&mut self, world: &mut World, sim: &mut Simulation) {
+        let start = std::time::Instant::now();
+        self.step_inner(world, sim);
+        self.stats.step_ms = start.elapsed().as_secs_f32() * 1000.0;
+    }
+
+    fn step_inner(&mut self, world: &mut World, sim: &mut Simulation) {
         let _span = tracing::trace_span!("physics_step", bodies = self.bodies.len()).entered();
         self.stats.rebuilds = 0;
         for piece in sim.take_detached() {
@@ -312,7 +323,7 @@ impl Physics {
         if let Some((_, rlo, rhi)) = b.world_collider
             && (lo - slack).cmpge(rlo).all()
             && (hi + slack).cmple(rhi).all()
-            && b.ticks_since_rebuild < 15
+            && b.ticks_since_rebuild < REBUILD_PERIOD
         {
             return;
         }

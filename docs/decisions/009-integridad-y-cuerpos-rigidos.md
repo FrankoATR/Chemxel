@@ -99,16 +99,22 @@ queda integrada al mundo.
 | Viga en voladizo | Vuelca (0,15 rad) y queda integrada |
 | `--bench-tower` (torre de 16×96×16 en el terreno, base excavada y un foso bajo media torre), enchufado | Media 0,21 ms/tick, p99 3,73, máx. 7,55 (0 ticks > 8 ms). La torre vuelca, se tumba y vuelve a la rejilla |
 
-**Incendio con colapsos** (`sim_fire`: bosque 6×6 con física; las copas caen al quemarse
-los troncos):
+**Incendio con colapsos** (bosque 6×6 con física; las copas caen al quemarse los
+troncos), medido enchufado:
+
+| Escenario | Media | p95 | p99 | Máximo |
+|---|---|---|---|---|
+| `sim_fire` + física (sin ventana) | 1,84 ms/tick | 4,85 | — | 6,9 |
+| `--bench-fire` en el juego | 3,9 ms/tick | 7,3 | 8,4–9,2 | 11,5–12 (2–3 % de ticks > 8 ms) |
+| Hito 5, sin integridad ni física (referencia) | 3,23 ms/tick | 5,78 | 6,82 | 9,24 |
+
 - Se sueltan 137 piezas, con un máximo de 9 cuerpos a la vez.
-- Medido **con batería** (la CPU va más lenta y los tiempos son ×2–2,5 los de
-  enchufado): media 4,34 ms/tick, p95 11,2, máx. 17,2.
-- El hito 5, sin integridad ni física y en las mismas condiciones, daba media 3,8,
-  p95 9,8 y máx. 12,2. La integridad y la física suman ~15 % de media.
-- Los picos son la creación de cuerpos: construir el colisionador del mundo cuando cae
-  una copa.
-- **Pendiente:** repetir enchufado.
+- Desglose del 2 % de ticks más lentos en el juego: autómata 4,71 ms, temperatura 1,78,
+  integridad 0,46, física 1,96.
+- La física cuesta ~2 ms en los ticks en que cae una copa (crear el cuerpo y el
+  colisionador del mundo). La integridad ya es barata.
+- Sin regresión en `sim_drop` (máx. 5,4) ni `sim_thermal` (máx. 5,3). `--bench-drop`:
+  máx. 6,5.
 
 ## Limitaciones conocidas
 

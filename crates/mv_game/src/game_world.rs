@@ -89,13 +89,11 @@ impl GameWorld {
         Box::new(move |p: mv_core::WorldPos| {
             let column = glam::IVec2::new((p.0.x >> 6) as i32, (p.0.z >> 6) as i32);
             let mut cache = last.lock().unwrap_or_else(|e| e.into_inner());
-            let heights = match &*cache {
-                Some((c, h)) if *c == column => std::sync::Arc::clone(h),
-                _ => {
-                    let h = generator.column(column);
-                    *cache = Some((column, std::sync::Arc::clone(&h)));
-                    h
-                }
+            if cache.as_ref().is_none_or(|(c, _)| *c != column) {
+                *cache = Some((column, generator.column(column)));
+            }
+            let Some((_, heights)) = cache.as_ref() else {
+                return false;
             };
             let surface = heights.get((p.0.x & 63) as usize, (p.0.z & 63) as usize);
             p.0.y < i64::from(surface) - i64::from(depth)

@@ -267,7 +267,11 @@ impl App {
             self.sim.step(&mut self.world.world);
             self.physics.step(&mut self.world.world, &mut self.sim);
             if let Some(b) = self.bench_drop.as_mut() {
-                b.record_tick(tick_start.elapsed(), &self.sim.stats());
+                b.record_tick(
+                    tick_start.elapsed(),
+                    &self.sim.stats(),
+                    self.physics.stats().step_ms,
+                );
             }
         }
         let ready = self.world.is_idle();
@@ -299,6 +303,7 @@ impl App {
         }
         if finished && let Some(b) = self.bench_drop.take() {
             tracing::info!("{}", b.report());
+            tracing::info!("{}", b.breakdown());
             self.exit_requested = true;
         }
         if ticks > 0 {

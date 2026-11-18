@@ -19,6 +19,8 @@ pub struct BenchDrop {
     duration: Duration,
     running: Option<Duration>,
     tick_ms: Vec<f64>,
+    /// Per tick: automaton, thermal, integrity, physics (ms).
+    parts: Vec<[f32; 4]>,
     max_active: usize,
     max_moves: u32,
     max_thermal: usize,
@@ -34,6 +36,7 @@ impl BenchDrop {
             duration,
             running: None,
             tick_ms: Vec::new(),
+            parts: Vec::new(),
             max_active: 0,
             max_moves: 0,
             max_thermal: 0,
@@ -52,9 +55,15 @@ impl BenchDrop {
         false
     }
 
-    pub fn record_tick(&mut self, elapsed: Duration, stats: &TickStats) {
+    pub fn record_tick(&mut self, elapsed: Duration, stats: &TickStats, physics_ms: f32) {
         if self.running.is_some() {
             self.tick_ms.push(elapsed.as_secs_f64() * 1000.0);
+            self.parts.push([
+                stats.automaton_ms,
+                stats.thermal_ms,
+                stats.integrity_ms,
+                physics_ms,
+            ]);
             self.max_active = self.max_active.max(stats.active_chunks);
             self.max_moves = self.max_moves.max(stats.moves);
             self.max_thermal = self.max_thermal.max(stats.thermal_chunks);
@@ -73,6 +82,27 @@ impl BenchDrop {
             }
             None => false,
         }
+    }
+
+    /// Average of each pass over the slowest 2% of ticks.
+    pub fn breakdown(&self) -> String {
+        let mut order: Vec<usize> = (0..self.tick_ms.len()).collect();
+        order.sort_by(|&a, &b| self.tick_ms[b].total_cmp(&self.tick_ms[a]));
+        let n = (order.len() / 50).max(1).min(order.len());
+        let mut sum = [0.0f32; 4];
+        for &i in &order[..n] {
+            for (s, p) in sum.iter_mut().zip(self.parts[i]) {
+                *s += p;
+            }
+        }
+        let k = n as f32;
+        format!(
+            "slowest {n} ticks: automaton {:.2}, thermal {:.2}, integrity {:.2}, physics {:.2} ms",
+            sum[0] / k,
+            sum[1] / k,
+            sum[2] / k,
+            sum[3] / k
+        )
     }
 
     pub fn report(&self) -> String {

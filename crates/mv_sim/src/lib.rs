@@ -72,6 +72,10 @@ pub struct TickStats {
     pub integrity_visited: u32,
     /// Floating pieces cut out of the grid this tick.
     pub detached: u32,
+    /// Wall time of each pass of the last tick, in milliseconds.
+    pub automaton_ms: f32,
+    pub thermal_ms: f32,
+    pub integrity_ms: f32,
 }
 
 /// Simulation state of an awake chunk.
@@ -376,6 +380,7 @@ impl Simulation {
         self.tick += 1;
         let mut stats = TickStats::default();
 
+        let t_start = std::time::Instant::now();
         let schedule = self.begin_tick(world);
         stats.active_chunks = self.active.len();
         let table = Arc::clone(&self.table);
@@ -472,10 +477,15 @@ impl Simulation {
                 }
             }
         }
+        let t_thermal = std::time::Instant::now();
+        stats.automaton_ms = (t_thermal - t_start).as_secs_f32() * 1000.0;
         let (transitions, flames) = self.thermal_step(world);
+        let t_integrity = std::time::Instant::now();
+        stats.thermal_ms = (t_integrity - t_thermal).as_secs_f32() * 1000.0;
         stats.transitions = transitions;
         stats.flames = flames;
         let (visited, detached) = self.integrity_step(world);
+        stats.integrity_ms = t_integrity.elapsed().as_secs_f32() * 1000.0;
         stats.integrity_visited = visited;
         stats.detached = detached;
         stats.thermal_chunks = self.thermal.len();
