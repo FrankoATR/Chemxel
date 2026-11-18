@@ -70,7 +70,36 @@ impl GameWorld {
             chunk_capacity: r.chunk_slot_capacity,
             brick_capacity: r.brick_pool_capacity,
             heat_capacity: r.heat_view_capacity,
+            body_capacity: config.physics.max_bodies,
+            body_voxel_capacity: config.physics.max_body_voxels,
         }
+    }
+
+    /// Structural integrity anchor: solids more than `depth` voxels below the
+    /// generated terrain surface never fall (ADR 009). Uses the generator's cached
+    /// column heights, with the last column kept at hand.
+    pub fn anchor(&self, depth: i32) -> mv_sim::Anchor {
+        let generator = std::sync::Arc::clone(self.streamer.generator());
+        let last: std::sync::Mutex<
+            Option<(
+                glam::IVec2,
+                std::sync::Arc<mv_world::terrain::ColumnHeights>,
+            )>,
+        > = std::sync::Mutex::new(None);
+        Box::new(move |p: mv_core::WorldPos| {
+            let column = glam::IVec2::new((p.0.x >> 6) as i32, (p.0.z >> 6) as i32);
+            let mut cache = last.lock().unwrap_or_else(|e| e.into_inner());
+            let heights = match &*cache {
+                Some((c, h)) if *c == column => std::sync::Arc::clone(h),
+                _ => {
+                    let h = generator.column(column);
+                    *cache = Some((column, std::sync::Arc::clone(&h)));
+                    h
+                }
+            };
+            let surface = heights.get((p.0.x & 63) as usize, (p.0.z & 63) as usize);
+            p.0.y < i64::from(surface) - i64::from(depth)
+        })
     }
 
     /// A camera position a few metres above the terrain at world column `(x, z)`.

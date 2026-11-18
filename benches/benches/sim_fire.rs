@@ -1,15 +1,16 @@
 //! Milestone 5 scenario: a 6×6 forest (trunks 3×3, canopies 13 wide, touching) on
 //! a stone floor, lit at one corner. Reports per-tick timings of the whole
-//! simulation (automaton + reactions + diffusion + combustion) and how the fire
-//! progresses.
+//! simulation (automaton + reactions + diffusion + combustion + integrity + rigid
+//! bodies) and how the fire progresses.
 //!
 //! `cargo bench -p mv_benches --bench sim_fire`
 
 use std::time::{Duration, Instant};
 
-use mv_core::config::SimConfig;
+use mv_core::config::{PhysicsConfig, SimConfig};
 use mv_core::{ChunkPos, WorldPos};
 use mv_materials::{MaterialId, MaterialRegistry, ReactionSet};
+use mv_physics::Physics;
 use mv_sim::Simulation;
 use mv_world::edit::fill_box;
 use mv_world::{Chunk, World};
@@ -56,6 +57,8 @@ fn main() {
         |_| true,
     );
     let mut sim = Simulation::new(&registry, &reactions, &SimConfig::default());
+    // Like the game's terrain anchor: the ground (y <= 0) never falls.
+    sim.set_anchor(Some(Box::new(|p: WorldPos| p.0.y <= 0)));
 
     // Same layout as the in-game scenario (crates/mv_game/src/drop_test.rs), on flat
     // ground: trunks, then canopies, then the fire.
@@ -123,11 +126,16 @@ fn main() {
         n
     };
 
+    // Burnt trunks drop their canopies: they fall as rigid bodies.
+    let mut physics = Physics::new(&registry, &PhysicsConfig::default(), 1.0 / 30.0);
+    let mut max_bodies = 0;
     let mut times = Vec::with_capacity(TICKS as usize);
     let (mut max_thermal, mut max_active, mut max_flames, mut max_reactions) = (0, 0, 0, 0);
     for tick in 1..=TICKS {
         let t = Instant::now();
         sim.step(&mut world);
+        physics.step(&mut world, &mut sim);
+        max_bodies = max_bodies.max(physics.stats().bodies);
         times.push(t.elapsed());
         world.take_edited();
         let s = sim.stats();
@@ -153,11 +161,12 @@ fn main() {
     sorted.sort();
     let pct = |p: f64| ms(sorted[((sorted.len() - 1) as f64 * p).round() as usize]);
     println!(
-        "sim_fire: {TICKS} ticks: avg {:.2} ms, p50 {:.2}, p95 {:.2}, max {:.2} ms/tick; max {max_active} active / {max_thermal} thermal chunks, max {max_flames} flames and {max_reactions} reactions per tick; {} of {fuel} fuel voxels left",
+        "sim_fire: {TICKS} ticks: avg {:.2} ms, p50 {:.2}, p95 {:.2}, max {:.2} ms/tick; max {max_active} active / {max_thermal} thermal chunks, max {max_flames} flames and {max_reactions} reactions per tick, max {max_bodies} rigid bodies ({} detached); {} of {fuel} fuel voxels left",
         ms(times.iter().sum::<Duration>()) / times.len() as f64,
         pct(0.5),
         pct(0.95),
         pct(1.0),
+        physics.stats().created,
         count(&world, &["wood", "leaves"]),
     );
 }

@@ -47,6 +47,10 @@ fn main() -> anyhow::Result<()> {
         .or_else(|| {
             seconds_arg("--bench-fire")
                 .map(|s| bench_drop::BenchDrop::new(drop_test::Scenario::ForestFire, secs(s)))
+        })
+        .or_else(|| {
+            seconds_arg("--bench-tower")
+                .map(|s| bench_drop::BenchDrop::new(drop_test::Scenario::TowerCollapse, secs(s)))
         });
     let bench = seconds_arg("--bench-fly").map(|seconds| {
         let c = &config.controls;

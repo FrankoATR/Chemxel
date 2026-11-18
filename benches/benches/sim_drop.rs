@@ -47,6 +47,8 @@ fn main() {
     let reactions_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/reactions");
     let reactions = ReactionSet::load_dir(reactions_dir.as_ref(), &registry).expect("reactions");
     let mut sim = Simulation::new(&registry, &reactions, &SimConfig::default());
+    // Like the game's terrain anchor: the ground (y <= 0) never falls.
+    sim.set_anchor(Some(Box::new(|p: WorldPos| p.0.y <= 0)));
     let sand_box = (w(-60, 60, -20), w(-21, 91, 19));
     let water_box = (w(20, 60, -20), w(59, 91, 19));
     let placed = fill_box(&mut world, sand_box.0, sand_box.1, sand, |_| true)

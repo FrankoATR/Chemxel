@@ -1,5 +1,6 @@
-//! `--bench-drop` / `--bench-heat` / `--bench-fire`: simulation benchmarks in the
-//! real game.
+//! `--bench-drop` / `--bench-heat` / `--bench-fire` / `--bench-tower`: simulation
+//! benchmarks in the real game (ms per tick = automaton + thermal + integrity +
+//! rigid bodies).
 //!
 //! Waits until the world around the spawn point is loaded, spawns a scenario on
 //! the terrain below the camera (sand + water, lava on ice, or a forest fire), then

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use mv_core::{Config, FixedTimestep};
 use mv_materials::{MaterialRegistry, ReactionSet};
+use mv_physics::Physics;
 use mv_render::{Camera, GpuContext, Renderer, SurfaceSize, VolumeStats};
 use mv_sim::Simulation;
 use mv_world::WorldStats;
@@ -71,6 +72,7 @@ pub struct App {
     hot_reload: Option<HotReload>,
     world: GameWorld,
     sim: Simulation,
+    physics: Physics,
     timestep: FixedTimestep,
     frame_timer: FrameTimer,
     camera: Camera,
@@ -111,7 +113,13 @@ impl App {
             hot_reload,
         } = materials;
         let editor = Editor::new(&config.editor, &registry);
-        let sim = Simulation::new(&registry, &reactions, &config.sim);
+        let mut sim = Simulation::new(&registry, &reactions, &config.sim);
+        sim.set_anchor(Some(world.anchor(config.world.anchor_depth)));
+        let physics = Physics::new(
+            &registry,
+            &config.physics,
+            (1.0 / config.sim.tick_rate_hz) as f32,
+        );
         Self {
             config,
             registry,
@@ -119,6 +127,7 @@ impl App {
             hot_reload,
             world,
             sim,
+            physics,
             timestep,
             frame_timer: FrameTimer::new(),
             camera,
@@ -256,6 +265,7 @@ impl App {
         for _ in 0..ticks {
             let tick_start = Instant::now();
             self.sim.step(&mut self.world.world);
+            self.physics.step(&mut self.world.world, &mut self.sim);
             if let Some(b) = self.bench_drop.as_mut() {
                 b.record_tick(tick_start.elapsed(), &self.sim.stats());
             }
@@ -276,7 +286,10 @@ impl App {
                 r.renderer.set_heat_view(true);
             }
             let ground = self.ground_below_camera();
-            if scenario == drop_test::Scenario::ForestFire {
+            if matches!(
+                scenario,
+                drop_test::Scenario::ForestFire | drop_test::Scenario::TowerCollapse
+            ) {
                 // Look at the forest from the side, a bit above the canopies.
                 self.camera.position = ground.0.as_dvec3() + glam::DVec3::new(-110.0, 90.0, -110.0);
                 self.camera.yaw = -3.0 * std::f32::consts::FRAC_PI_4; // towards +x, +z
@@ -364,6 +377,7 @@ impl App {
                 timings: &self.stats.timings,
                 tick: self.sim.tick(),
                 sim: &sim_stats,
+                physics: &self.physics.stats(),
                 sim_active: self.sim.active_chunks(),
                 sim_paused: self.sim.is_paused(),
                 heat_view: running.renderer.heat_view(),
@@ -394,6 +408,24 @@ impl App {
         let Some(running) = self.running.as_mut() else {
             return;
         };
+
+        let bodies: Vec<mv_render::BodyInstance<'_>> = self
+            .physics
+            .bodies()
+            .iter()
+            .map(|b| {
+                let pose = self.physics.pose(b);
+                let s = b.voxels.size;
+                mv_render::BodyInstance {
+                    id: b.id,
+                    size: [s.x as u32, s.y as u32, s.z as u32],
+                    voxels: &b.voxels.voxels,
+                    position: pose.position,
+                    rotation: pose.rotation,
+                }
+            })
+            .collect();
+        running.renderer.set_bodies(&bodies);
 
         if running.renderer.heat_view() {
             running
@@ -447,6 +479,8 @@ impl App {
             Some(drop_test::Scenario::LavaOnIce)
         } else if actions.forest_fire {
             Some(drop_test::Scenario::ForestFire)
+        } else if actions.tower {
+            Some(drop_test::Scenario::TowerCollapse)
         } else {
             None
         };
@@ -466,8 +500,9 @@ impl App {
 
     fn spawn_scenario(&mut self, ground: mv_core::WorldPos, scenario: drop_test::Scenario) {
         for p in drop_test::spawn(&mut self.world.world, &self.registry, ground, scenario) {
-            self.sim
-                .edited(&self.world.world, p.min, p.max, Some(p.material));
+            // Air boxes are removals: reported as such, they trigger integrity.
+            let placed = (!p.material.is_air()).then_some(p.material);
+            self.sim.edited(&self.world.world, p.min, p.max, placed);
         }
     }
 

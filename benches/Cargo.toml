@@ -20,6 +20,7 @@ criterion.workspace = true
 glam.workspace = true
 mv_materials.workspace = true
 mv_sim.workspace = true
+mv_physics.workspace = true
 rayon.workspace = true
 
 [[bench]]

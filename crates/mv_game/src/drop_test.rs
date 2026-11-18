@@ -6,6 +6,11 @@
 //!   slab resting on the ground.
 //! * [`Scenario::ForestFire`] (milestone 5): a 6×6 grid of trees with touching
 //!   canopies on the terrain, lit at one corner.
+//! * [`Scenario::TowerCollapse`] (milestone 6): a 1×6 m stone tower whose base is
+//!   dug out, half of it over a pit, so it falls and tips over.
+//!
+//! Boxes of material "air" are removals (they overwrite anything); the caller
+//! reports them to the simulation as such, which triggers structural integrity.
 
 use mv_core::WorldPos;
 use mv_materials::{MaterialId, MaterialRegistry};
@@ -17,6 +22,7 @@ pub enum Scenario {
     SandAndWater,
     LavaOnIce,
     ForestFire,
+    TowerCollapse,
 }
 
 /// A box that was filled, for `Simulation::edited`.
@@ -46,6 +52,7 @@ pub fn spawn(
             ("lava", p(-8, 9, -8), p(7, 16, 7)),
         ],
         Scenario::ForestFire => forest(world, ground),
+        Scenario::TowerCollapse => tower(world, ground),
     };
     let mut placed = Vec::new();
     let mut voxels = 0;
@@ -54,7 +61,11 @@ pub fn spawn(
             tracing::warn!("scenario {scenario:?} needs the material \"{name}\"");
             continue;
         };
-        voxels += fill_box(world, min, max, material, MaterialId::is_air);
+        voxels += if material.is_air() {
+            fill_box(world, min, max, material, |_| true)
+        } else {
+            fill_box(world, min, max, material, MaterialId::is_air)
+        };
         placed.push(Placed { min, max, material });
     }
     tracing::info!("scenario {scenario:?}: placed {voxels} voxels");
@@ -93,6 +104,20 @@ fn forest(world: &World, ground: WorldPos) -> Vec<(&'static str, WorldPos, World
         }
     }
     trunks.into_iter().chain(canopies).chain(fire).collect()
+}
+
+/// A 16×96×16 stone tower standing on the ground at `ground`, then its base dug out
+/// and a pit under one half, so it drops and tips into the pit.
+fn tower(world: &World, ground: WorldPos) -> Vec<(&'static str, WorldPos, WorldPos)> {
+    let g = ground.0;
+    let s = surface(world, g.x, g.z, g.y).unwrap_or(g.y);
+    let w = |x, y, z| WorldPos::new(g.x + x, y, g.z + z);
+    vec![
+        ("stone", w(-8, s + 1, -8), w(7, s + 96, 7)),
+        // The pit under the +x half (and a bit beyond), then the base itself.
+        ("air", w(0, s - 12, -10), w(30, s, 9)),
+        ("air", w(-8, s + 1, -8), w(7, s + 6, 7)),
+    ]
 }
 
 /// Height of the topmost non-air voxel of column `(x, z)` within 64 voxels of `y`.

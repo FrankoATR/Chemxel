@@ -15,13 +15,13 @@ publish = false
 #   mv_core <- mv_materials <- mv_world <- mv_sim <- mv_physics
 #   mv_render -> mv_core, mv_world        mv_game -> everything
 # An internal crate is listed here only once another crate actually uses it
-# (cargo warns about unused workspace dependencies). Pending:
-#   mv_physics = { path = "crates/mv_physics" }
+# (cargo warns about unused workspace dependencies).
 mv_core = { path = "crates/mv_core" }
 mv_materials = { path = "crates/mv_materials" }
 mv_world = { path = "crates/mv_world" }
 mv_sim = { path = "crates/mv_sim" }
 mv_render = { path = "crates/mv_render" }
+mv_physics = { path = "crates/mv_physics" }
 
 # External crates. Versions are pinned here so every crate uses the same one.
 # wgpu / winit versions must stay compatible with egui-wgpu / egui-winit.

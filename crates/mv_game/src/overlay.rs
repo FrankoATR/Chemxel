@@ -3,6 +3,7 @@
 use glam::{DVec3, IVec3};
 use mv_core::consts::VOXELS_PER_BLOCK;
 use mv_materials::MaterialRegistry;
+use mv_physics::PhysicsStats;
 use mv_render::VolumeStats;
 use mv_sim::TickStats;
 use mv_world::WorldStats;
@@ -47,6 +48,7 @@ pub struct OverlayData<'a> {
     pub timings: &'a Timings,
     pub tick: u64,
     pub sim: &'a TickStats,
+    pub physics: &'a PhysicsStats,
     pub sim_active: usize,
     pub sim_paused: bool,
     pub heat_view: bool,
@@ -67,6 +69,7 @@ pub struct OverlayActions {
     pub drop_test: bool,
     pub lava_on_ice: bool,
     pub forest_fire: bool,
+    pub tower: bool,
     pub toggle_pause: bool,
 }
 
@@ -129,6 +132,20 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
                 s.reactions, s.decays, s.flames
             ),
         );
+        let p = d.physics;
+        row(
+            ui,
+            "Rigid bodies",
+            format!(
+                "{} flying ({} substeps), {} detached / {} settled",
+                p.bodies, p.substeps, p.created, p.settled
+            ),
+        );
+        row(
+            ui,
+            "Integrity",
+            format!("{} voxels checked/tick", s.integrity_visited),
+        );
         row(
             ui,
             "Target temp.",
@@ -160,6 +177,13 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
             .clicked()
         {
             actions.forest_fire = true;
+        }
+        if ui
+            .button("Tower collapse")
+            .on_hover_text("A stone tower on the voxel under the crosshair, with its base dug out")
+            .clicked()
+        {
+            actions.tower = true;
         }
         let label = if d.sim_paused {
             "Resume (P)"
