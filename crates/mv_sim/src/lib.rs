@@ -201,6 +201,53 @@ impl Simulation {
         self.edited(world, min, max, None);
     }
 
+    /// A modified chunk came back into the world (from a save or the memory stash,
+    /// ADR 011). Temperatures are not kept across unloads, so materials with a base
+    /// temperature get it back (lava stays molten, ice stays frozen), unstable ones
+    /// get a field, and the whole chunk is simulated again (what was falling falls).
+    pub fn chunk_restored(&mut self, world: &World, pos: ChunkPos) {
+        let origin = pos.origin().0;
+        self.wake_box(world, WorldPos(origin), WorldPos(origin + 63));
+        let Some(chunk) = world.chunk(pos) else {
+            return;
+        };
+        let mut present: Vec<MaterialId> = Vec::new();
+        for b in 0..mv_core::consts::BRICKS_PER_CHUNK {
+            match chunk.brick(b) {
+                mv_world::BrickRef::Uniform(m) => {
+                    if !present.contains(&m) {
+                        present.push(m);
+                    }
+                }
+                mv_world::BrickRef::Dense(v) => {
+                    for &m in v.iter() {
+                        if !present.contains(&m) {
+                            present.push(m);
+                        }
+                    }
+                }
+            }
+        }
+        let table = Arc::clone(&self.table);
+        let needs_field = present.iter().any(|&m| {
+            table.thermal(m).base_temperature.is_some()
+                || unstable_at(&table, m, self.ambient, self.hysteresis)
+        });
+        if !needs_field {
+            return;
+        }
+        self.ensure_field(world, pos);
+        let Some(f) = self.thermal.get_mut(&pos) else {
+            return;
+        };
+        for m in present {
+            let p = *table.thermal(m);
+            if let Some(base) = p.base_temperature {
+                set_base_temperature(f, chunk, Aabb::CHUNK, m, p.capacity, base);
+            }
+        }
+    }
+
     /// Like [`Simulation::voxels_placed`] but without an integrity check (a piece put
     /// back where it was cut out, e.g. when there is no room for more bodies).
     pub fn voxels_restored(&mut self, world: &World, min: WorldPos, max: WorldPos) {

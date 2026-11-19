@@ -99,6 +99,25 @@ fn placed_materials_get_their_base_temperature() {
 }
 
 #[test]
+fn restored_chunks_get_their_base_temperatures_back() {
+    let mut f = fixture();
+    // As if loaded from a save: lava written without telling the simulation.
+    let lava = f.id("lava");
+    fill_box(&mut f.world, w(8, 1, 8), w(15, 4, 15), lava, |_| true);
+    assert_eq!(f.sim.temperature_at(w(10, 2, 10)), 20.0);
+    f.sim.chunk_restored(&f.world, ChunkPos::new(0, 0, 0));
+    assert!(f.sim.temperature_at(w(10, 2, 10)) > 1000.0);
+    f.run(20);
+    // Lava that flows out into cold cells freezes (4³ cells, ADR 007), but the bulk
+    // and its core stay molten instead of freezing at ambient.
+    assert!(f.sim.temperature_at(w(10, 2, 10)) > 800.0);
+    assert!(
+        f.count("lava", w(-20, 1, -20), w(40, 10, 40)) > 128,
+        "the lava stays molten instead of freezing at ambient"
+    );
+}
+
+#[test]
 fn stable_materials_need_no_field() {
     let mut f = fixture();
     f.place(w(8, 1, 8), w(15, 4, 15), "water");
