@@ -28,8 +28,8 @@ impl FlyController {
         }
     }
 
-    /// Applies mouse look (if `look` is true) and keyboard movement for `dt` seconds.
-    pub fn update(&self, camera: &mut Camera, input: &mut InputState, dt: f32, look: bool) {
+    /// Applies the mouse motion since the last call (if `look` is true).
+    pub fn look(&self, camera: &mut Camera, input: &mut InputState, look: bool) {
         let mouse = input.take_mouse_delta();
         if look {
             camera.yaw -= mouse.x * self.sensitivity;
@@ -37,6 +37,11 @@ impl FlyController {
                 .clamp(-Camera::MAX_PITCH, Camera::MAX_PITCH);
             camera.yaw = camera.yaw.rem_euclid(std::f32::consts::TAU);
         }
+    }
+
+    /// Applies mouse look (if `look` is true) and keyboard movement for `dt` seconds.
+    pub fn update(&self, camera: &mut Camera, input: &mut InputState, dt: f32, look: bool) {
+        self.look(camera, input, look);
 
         let axis = |pos: KeyCode, neg: KeyCode| {
             f32::from(u8::from(input.is_held(pos))) - f32::from(u8::from(input.is_held(neg)))

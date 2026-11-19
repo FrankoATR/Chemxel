@@ -226,6 +226,8 @@ pub struct WorldConfig {
     /// Solids deeper than this many voxels below the generated terrain surface are
     /// anchored (structural integrity stops there).
     pub anchor_depth: i32,
+    /// Seconds between automatic saves (0 = only on exit).
+    pub autosave_seconds: f32,
 }
 
 impl Default for WorldConfig {
@@ -236,6 +238,7 @@ impl Default for WorldConfig {
             unload_margin_chunks: 2,
             max_inflight_jobs: 64,
             anchor_depth: 32,
+            autosave_seconds: 60.0,
         }
     }
 }
@@ -315,6 +318,20 @@ pub struct ControlsConfig {
     pub fast_multiplier: f32,
     /// Radians of rotation per pixel of mouse motion.
     pub mouse_sensitivity: f32,
+    /// Start walking (true) or flying (false); `F` toggles in game.
+    pub start_walking: bool,
+    /// Walking speed, m/s (Shift runs at up to 2x).
+    pub walk_speed: f32,
+    /// Jump height, metres.
+    pub jump_height: f32,
+    /// Gravity on the player, m/s².
+    pub gravity: f32,
+    /// Ledges up to this height are climbed automatically, metres.
+    pub step_height: f32,
+    /// Player box and eye height, metres.
+    pub player_width: f32,
+    pub player_height: f32,
+    pub eye_height: f32,
 }
 
 impl Default for ControlsConfig {
@@ -323,6 +340,14 @@ impl Default for ControlsConfig {
             fly_speed: 4.0,
             fast_multiplier: 5.0,
             mouse_sensitivity: 0.0025,
+            start_walking: true,
+            walk_speed: 4.3,
+            jump_height: 1.1,
+            gravity: 20.0,
+            step_height: 0.5,
+            player_width: 0.6,
+            player_height: 1.8,
+            eye_height: 1.62,
         }
     }
 }
@@ -456,6 +481,24 @@ impl Config {
         }
         if sim.integrity_natural_period == 0 {
             return invalid("sim.integrity_natural_period", "must be at least 1");
+        }
+        let c = &self.controls;
+        if !(c.walk_speed > 0.0
+            && c.jump_height >= 0.0
+            && c.gravity > 0.0
+            && c.step_height >= 0.0
+            && c.player_width > 0.0
+            && c.player_height > c.player_width.min(c.eye_height)
+            && c.eye_height > 0.0
+            && c.eye_height <= c.player_height)
+        {
+            return invalid(
+                "controls.walk_speed/jump_height/gravity/step_height/player_*",
+                "positive sizes and speeds, eye_height <= player_height",
+            );
+        }
+        if self.world.autosave_seconds < 0.0 {
+            return invalid("world.autosave_seconds", "must be >= 0");
         }
         if self.world.anchor_depth < 0 {
             return invalid("world.anchor_depth", "must be >= 0");

@@ -165,6 +165,16 @@ impl Physics {
         }
     }
 
+    /// Puts every body back into the grid where it is now (before saving).
+    pub fn settle_all(&mut self, world: &mut World, sim: &mut Simulation) {
+        for piece in sim.take_detached() {
+            self.add_body(piece);
+        }
+        while let Some(body) = self.bodies.pop() {
+            self.remove(world, sim, body, true);
+        }
+    }
+
     /// Takes the pieces the simulation cut out, steps the bodies, and puts settled
     /// ones back into the grid.
     pub fn step(&mut self, world: &mut World, sim: &mut Simulation) {

@@ -36,6 +36,8 @@ use crate::gui::Gui;
 use crate::hot_reload::HotReload;
 use crate::input::InputState;
 use crate::overlay::{self, OverlayData, Timings};
+use crate::player::Player;
+use crate::save::{PlayerState, SAVE_VERSION, SaveHeader, SaveSlot};
 
 /// Lighting quality presets cycled with F6.
 const LIGHTING_PRESETS: [&str; 3] = ["full", "shadows only", "off"];
@@ -81,6 +83,12 @@ pub struct App {
     camera: Camera,
     fly: FlyController,
     editor: Editor,
+    player: Player,
+    /// Where the world is saved (`None`: nothing is saved, e.g. benchmarks).
+    save: Option<SaveSlot>,
+    since_autosave: Duration,
+    /// Last save: when, chunks written.
+    last_save: Option<(Instant, usize)>,
     input: InputState,
     cursor_grabbed: bool,
     show_overlay: bool,
@@ -102,14 +110,19 @@ impl App {
         world: GameWorld,
         bench: Option<BenchFly>,
         bench_drop: Option<BenchDrop>,
+        save: Option<(SaveSlot, Option<SaveHeader>)>,
     ) -> Self {
         let timestep = FixedTimestep::new(config.sim.tick_rate_hz, config.sim.max_ticks_per_frame);
-        let camera = Camera::new(
+        let mut camera = Camera::new(
             world.spawn_point(0, 0),
             std::f32::consts::FRAC_PI_4,
             -0.3,
             config.render.fov_y_deg.to_radians(),
         );
+        let (save, header) = match save {
+            Some((slot, header)) => (Some(slot), header),
+            None => (None, None),
+        };
         let fly = FlyController::new(&config.controls);
         let Materials {
             registry,
@@ -118,6 +131,22 @@ impl App {
             hot_reload,
         } = materials;
         let editor = Editor::new(&config.editor, &registry);
+        // Spawn: where the save left the player, or a few metres above the terrain.
+        let mut player = Player::new(&config.controls, &registry, glam::DVec3::ZERO);
+        match &header {
+            Some(h) => {
+                player.feet = glam::DVec3::from_array(h.player.feet);
+                player.walking = h.player.walking;
+                camera.yaw = h.player.yaw;
+                camera.pitch = h.player.pitch;
+                camera.position = player.eye_position();
+            }
+            None => player.set_eye_position(camera.position),
+        }
+        // Benchmarks drive the camera themselves.
+        if bench.is_some() || bench_drop.is_some() {
+            player.walking = false;
+        }
         let mut sim = Simulation::new(&registry, &reactions, &config.sim);
         sim.set_anchor(Some(world.anchor(config.world.anchor_depth)));
         let physics = Physics::new(
@@ -138,6 +167,10 @@ impl App {
             camera,
             fly,
             editor,
+            player,
+            save,
+            since_autosave: Duration::ZERO,
+            last_save: None,
             input: InputState::default(),
             cursor_grabbed: false,
             show_overlay: true,
@@ -189,6 +222,65 @@ impl App {
             renderer,
             gui,
         })
+    }
+
+    /// Saves every `world.autosave_seconds`, but never while rigid bodies are flying
+    /// (their voxels are out of the grid); it waits for them to land.
+    fn autosave(&mut self, dt: Duration) {
+        let period = self.config.world.autosave_seconds;
+        if self.save.is_none() || period <= 0.0 {
+            return;
+        }
+        self.since_autosave += dt;
+        if self.since_autosave.as_secs_f32() >= period && self.physics.stats().bodies == 0 {
+            self.save_world(false);
+        }
+    }
+
+    /// Writes the modified chunks and the header. `final_save` (on exit) first puts
+    /// flying rigid bodies back into the grid where they are.
+    fn save_world(&mut self, final_save: bool) {
+        self.since_autosave = Duration::ZERO;
+        if self.save.is_none() {
+            return;
+        }
+        if final_save {
+            self.physics
+                .settle_all(&mut self.world.world, &mut self.sim);
+        }
+        let start = Instant::now();
+        let result = self.world.save_chunks().and_then(|(chunks, bytes)| {
+            let header = SaveHeader {
+                version: SAVE_VERSION,
+                seed: self.config.sim.seed,
+                world: self.config.world.clone(),
+                tick: self.sim.tick(),
+                player: PlayerState {
+                    feet: self.player.feet.to_array(),
+                    yaw: self.camera.yaw,
+                    pitch: self.camera.pitch,
+                    walking: self.player.walking,
+                },
+            };
+            let slot = self
+                .save
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no save slot"))?;
+            slot.write_header(&header)?;
+            Ok((chunks, bytes, slot.store.len(), slot.dir().to_owned()))
+        });
+        match result {
+            Ok((chunks, bytes, total, dir)) => {
+                tracing::info!(
+                    "saved {chunks} chunks ({:.1} KiB, {total} in the save) to {} in {:.1} ms",
+                    bytes as f64 / 1024.0,
+                    dir.display(),
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+                self.last_save = Some((Instant::now(), chunks));
+            }
+            Err(e) => tracing::error!("saving failed: {e:#}"),
+        }
     }
 
     /// Starts with lighting preset `index` (0 full, 1 shadows only, 2 off).
@@ -268,6 +360,7 @@ impl App {
         self.sim
             .set_materials(&registry, &reactions, &self.world.world);
         self.editor.set_materials(&registry);
+        self.player.set_materials(&registry);
         if let Some(r) = self.running.as_mut() {
             r.renderer
                 .set_materials(&game_world::gpu_materials(&registry));
@@ -357,6 +450,16 @@ impl App {
                 self.bench = None;
                 self.exit_requested = true;
             }
+        } else if self.player.walking {
+            self.fly
+                .look(&mut self.camera, &mut self.input, self.cursor_grabbed);
+            self.player.walk(
+                &self.world.world,
+                &self.input,
+                &self.camera,
+                dt.as_secs_f32(),
+            );
+            self.camera.position = self.player.eye_position();
         } else {
             self.fly.update(
                 &mut self.camera,
@@ -364,12 +467,17 @@ impl App {
                 dt.as_secs_f32(),
                 self.cursor_grabbed,
             );
+            self.player.set_eye_position(self.camera.position);
         }
 
         let t = Instant::now();
         if let Some(edit) = self.editor.update(&mut self.world.world, &self.camera, dt) {
             self.sim
                 .edited(&self.world.world, edit.min, edit.max, edit.placed);
+            if edit.placed.is_some() && self.player.walking {
+                // Do not bury the player in what they just placed.
+                self.player.unstick(&self.world.world);
+            }
         }
         self.stats
             .timings
@@ -384,6 +492,14 @@ impl App {
         self.stats.sync = self
             .world
             .update(self.camera.position, &mut running.renderer);
+        // Chunks that came back from disk or memory: base temperatures, wake up.
+        for pos in self.world.take_restored() {
+            self.sim.chunk_restored(&self.world.world, pos);
+        }
+        self.autosave(dt);
+        let Some(running) = self.running.as_mut() else {
+            return;
+        };
         self.stats
             .timings
             .world
@@ -408,6 +524,14 @@ impl App {
                 timings: &self.stats.timings,
                 tick: self.sim.tick(),
                 sim: &sim_stats,
+                walking: self.player.walking,
+                save_status: self.save.as_ref().map(|s| {
+                    let ago = self.last_save.map_or_else(
+                        || "not saved yet".to_owned(),
+                        |(t, n)| format!("saved {n} chunks {:.0} s ago", t.elapsed().as_secs_f32()),
+                    );
+                    format!("{} ({} chunks on disk), {ago}", s.name, s.store.len())
+                }),
                 physics: &self.physics.stats(),
                 sim_active: self.sim.active_chunks(),
                 sim_paused: self.sim.is_paused(),
@@ -501,6 +625,9 @@ impl App {
     }
 
     fn apply_overlay_actions(&mut self, actions: overlay::OverlayActions) {
+        if actions.save_now {
+            self.save_world(false);
+        }
         if actions.toggle_pause {
             self.sim.set_paused(!self.sim.is_paused());
         }
@@ -556,6 +683,20 @@ impl App {
                         let on = !r.renderer.heat_view();
                         r.renderer.set_heat_view(on);
                     }
+                }
+                KeyCode::KeyF if self.bench.is_none() && self.bench_drop.is_none() => {
+                    self.player.toggle_walking(&self.world.world);
+                    if self.player.walking {
+                        self.camera.position = self.player.eye_position();
+                    }
+                    tracing::info!(
+                        "{}",
+                        if self.player.walking {
+                            "walking"
+                        } else {
+                            "flying"
+                        }
+                    );
                 }
                 KeyCode::F6 => {
                     self.lighting_preset = (self.lighting_preset + 1) % LIGHTING_PRESETS.len();
@@ -674,6 +815,11 @@ impl ApplicationHandler for App {
         {
             self.input.add_mouse_motion(dx, dy);
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Leaving the game (window closed, Esc, end of a benchmark) saves the world.
+        self.save_world(true);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {

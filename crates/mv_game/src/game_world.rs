@@ -61,6 +61,40 @@ impl GameWorld {
         })
     }
 
+    /// Saves modified chunks to `store` on unload and loads saved ones from it.
+    pub fn set_store(&mut self, store: Arc<mv_world::store::ChunkStore>) {
+        self.streamer.set_store(store);
+    }
+
+    /// Modified chunks that came back (from disk or memory) since the last call.
+    pub fn take_restored(&mut self) -> Vec<ChunkPos> {
+        self.streamer.take_restored()
+    }
+
+    /// Writes every loaded chunk with unsaved changes to the store. Returns the
+    /// number of chunks and bytes written.
+    pub fn save_chunks(&mut self) -> anyhow::Result<(usize, usize)> {
+        let Some(store) = self.streamer.store().cloned() else {
+            return Ok((0, 0));
+        };
+        let positions: Vec<ChunkPos> = self
+            .world
+            .iter()
+            .filter(|(_, c)| c.is_unsaved())
+            .map(|(p, _)| p)
+            .collect();
+        let (mut chunks, mut bytes) = (0, 0);
+        for pos in positions {
+            if let Some(chunk) = self.world.chunk_mut(pos) {
+                bytes += store
+                    .save(pos, chunk)
+                    .with_context(|| format!("saving chunk {pos:?}"))?;
+                chunks += 1;
+            }
+        }
+        Ok((chunks, bytes))
+    }
+
     /// GPU volume that covers the render distance around the camera.
     pub fn volume_desc(config: &Config) -> VolumeDesc {
         let r = &config.render;

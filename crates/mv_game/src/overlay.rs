@@ -48,6 +48,9 @@ pub struct OverlayData<'a> {
     pub timings: &'a Timings,
     pub tick: u64,
     pub sim: &'a TickStats,
+    pub walking: bool,
+    /// World name and save state (`None`: not saving).
+    pub save_status: Option<String>,
     pub physics: &'a PhysicsStats,
     pub sim_active: usize,
     pub sim_paused: bool,
@@ -70,6 +73,7 @@ pub struct OverlayActions {
     pub lava_on_ice: bool,
     pub forest_fire: bool,
     pub tower: bool,
+    pub save_now: bool,
     pub toggle_pause: bool,
 }
 
@@ -185,6 +189,9 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
         {
             actions.tower = true;
         }
+        if d.save_status.is_some() && ui.button("Save now").clicked() {
+            actions.save_now = true;
+        }
         let label = if d.sim_paused {
             "Resume (P)"
         } else {
@@ -297,6 +304,23 @@ fn world(ui: &mut egui::Ui, d: &OverlayData<'_>, target: Option<&RayHit>) {
                 g.resident_chunks, g.chunk_slots_in_use, g.chunk_slot_capacity
             ),
         );
+        row(
+            ui,
+            "Player",
+            if d.walking {
+                "walking (F: fly)"
+            } else {
+                "flying (F: walk)"
+            }
+            .to_owned(),
+        );
+        row(
+            ui,
+            "World",
+            d.save_status
+                .clone()
+                .unwrap_or_else(|| "not saved (benchmark or --no-save)".to_owned()),
+        );
         let target = target.map_or_else(
             || "-".to_owned(),
             |hit| {
@@ -344,7 +368,7 @@ fn brush(ui: &mut egui::Ui, registry: &MaterialRegistry, editor: &mut Editor) {
 
 fn help(ui: &mut egui::Ui, grabbed: bool) {
     let text = if grabbed {
-        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD/Space/Ctrl move · Shift fast · Esc release mouse · F3 overlay · F5 heat view · F6 lighting"
+        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD move · Space jump/up · Ctrl down · Shift fast · F walk/fly · Esc release mouse · F3 overlay · F5 heat view · F6 lighting"
     } else {
         "Click the world to capture the mouse · Esc quits · F3 overlay"
     };

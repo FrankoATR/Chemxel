@@ -58,11 +58,20 @@
         unload_margin_chunks: 2,
         max_inflight_jobs: 64,
         anchor_depth: 32,        // solids this far below the generated surface never fall
+        autosave_seconds: 60.0,  // 0 = save only on exit
     ),
     controls: (
         fly_speed: 4.0,          // m/s
         fast_multiplier: 5.0,    // while holding Shift
         mouse_sensitivity: 0.0025,
+        start_walking: true,     // F toggles walking / flying in game
+        walk_speed: 4.3,         // m/s (Shift runs)
+        jump_height: 1.1,        // m
+        gravity: 20.0,           // m/s² on the player
+        step_height: 0.5,        // ledges climbed automatically, m
+        player_width: 0.6,       // m
+        player_height: 1.8,
+        eye_height: 1.62,
     ),
     editor: (
         brush_radius: 6.0,

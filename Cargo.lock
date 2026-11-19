@@ -1641,6 +1641,8 @@ dependencies = [
  "mv_sim",
  "mv_world",
  "pollster",
+ "ron",
+ "serde",
  "tracing",
  "tracing-subscriber",
  "tracing-tracy",

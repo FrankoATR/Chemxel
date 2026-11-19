@@ -4,6 +4,17 @@ use std::path::{Path, PathBuf};
 
 /// Environment variable that overrides the assets directory.
 pub const ASSETS_DIR_ENV: &str = "CHEMXEL_ASSETS_DIR";
+/// Environment variable that overrides where worlds are saved.
+pub const SAVES_DIR_ENV: &str = "CHEMXEL_SAVES_DIR";
+
+/// Directory holding the saved worlds: `CHEMXEL_SAVES_DIR`, or `saves/` in the
+/// current working directory.
+pub fn saves_dir() -> PathBuf {
+    std::env::var_os(SAVES_DIR_ENV)
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok().map(|d| d.join("saves")))
+        .unwrap_or_else(|| PathBuf::from("saves"))
+}
 
 /// Finds the `assets/` directory.
 ///
