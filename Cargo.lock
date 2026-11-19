@@ -1705,6 +1705,7 @@ dependencies = [
  "mv_materials",
  "noise",
  "rayon",
+ "thiserror 2.0.21",
  "tracing",
 ]
 

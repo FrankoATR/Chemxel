@@ -6,8 +6,11 @@
 //!   and are inserted by [`Streamer::update`] on the calling thread, so the
 //!   [`World`] is never shared between threads.
 //! * Chunks beyond the region plus `unload_margin` are removed. Modified chunks are
-//!   kept in a stash and restored instead of regenerated (persistence to disk is
-//!   milestone 8).
+//!   written to the [`ChunkStore`] if there is one (ADR 011), or kept in a memory
+//!   stash otherwise, and restored instead of regenerated.
+//! * Saved chunks are decoded in the background job that would have generated
+//!   them. Chunks restored from the store or the stash are reported by
+//!   [`Streamer::take_restored`] (the simulation wakes them up).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -16,6 +19,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use glam::IVec3;
 use mv_core::ChunkPos;
 
+use crate::store::ChunkStore;
 use crate::terrain::TerrainGenerator;
 use crate::{Chunk, World};
 
@@ -62,6 +66,9 @@ pub struct Streamer {
     tx: Sender<(ChunkPos, Chunk)>,
     rx: Receiver<(ChunkPos, Chunk)>,
     stash: HashMap<ChunkPos, Chunk>,
+    store: Option<Arc<ChunkStore>>,
+    /// Modified chunks inserted since the last `take_restored`.
+    restored: Vec<ChunkPos>,
 }
 
 impl Streamer {
@@ -78,7 +85,24 @@ impl Streamer {
             tx,
             rx,
             stash: HashMap::new(),
+            store: None,
+            restored: Vec::new(),
         }
+    }
+
+    /// Saves modified chunks to `store` when they are unloaded, and loads saved
+    /// chunks from it instead of generating them.
+    pub fn set_store(&mut self, store: Arc<ChunkStore>) {
+        self.store = Some(store);
+    }
+
+    pub fn store(&self) -> Option<&Arc<ChunkStore>> {
+        self.store.as_ref()
+    }
+
+    /// Modified chunks (from the store or the stash) inserted since the last call.
+    pub fn take_restored(&mut self) -> Vec<ChunkPos> {
+        std::mem::take(&mut self.restored)
     }
 
     pub fn generator(&self) -> &Arc<TerrainGenerator> {
@@ -138,10 +162,14 @@ impl Streamer {
             }
             self.inflight.insert(pos);
             let generator = Arc::clone(&self.generator);
+            let store = self.store.clone().filter(|s| s.contains(pos));
             let tx = self.tx.clone();
             rayon::spawn(move || {
+                let chunk = store
+                    .and_then(|s| s.load(pos))
+                    .unwrap_or_else(|| generator.generate(pos));
                 // The receiver only disappears when the streamer is dropped.
-                let _ = tx.send((pos, generator.generate(pos)));
+                let _ = tx.send((pos, chunk));
             });
         }
     }
@@ -149,6 +177,9 @@ impl Streamer {
     fn insert(&mut self, center: ChunkPos, pos: ChunkPos, chunk: Chunk, world: &mut World) {
         if self.settings.within(center, pos, 0) {
             self.loaded_in_region += 1;
+        }
+        if chunk.is_modified() {
+            self.restored.push(pos);
         }
         world.insert(pos, chunk);
     }
@@ -163,10 +194,23 @@ impl Streamer {
             .filter(|&p| !s.within(center, p, s.unload_margin))
             .collect();
         for pos in far {
-            if let Some(chunk) = world.remove(pos)
-                && chunk.is_modified()
-            {
-                self.stash.insert(pos, chunk);
+            let Some(mut chunk) = world.remove(pos) else {
+                continue;
+            };
+            if !chunk.is_modified() {
+                continue;
+            }
+            match &self.store {
+                Some(_) if !chunk.is_unsaved() => {}
+                Some(store) => {
+                    if let Err(e) = store.save(pos, &mut chunk) {
+                        tracing::error!("could not save chunk {pos:?}: {e}; keeping it in memory");
+                        self.stash.insert(pos, chunk);
+                    }
+                }
+                None => {
+                    self.stash.insert(pos, chunk);
+                }
             }
         }
         self.loaded_in_region = world
@@ -272,6 +316,54 @@ mod tests {
         run_until_idle(&mut s, origin, &mut world);
         assert_eq!(world.voxel(p), Some(marker));
         assert_eq!(s.stats().stashed, 0);
+    }
+
+    /// PROMPT.md milestone 8 acceptance at the world level: changes saved in one
+    /// session are there in the next one.
+    #[test]
+    fn saved_changes_survive_a_restart() {
+        let dir = crate::store::tests::temp_dir("stream_store");
+        // Names for the test palette's ids (1..=5) plus a marker (6).
+        let registry = mv_materials::MaterialRegistry::from_sources([(
+            "m.ron",
+            r#"[
+                Material(name: "air",    state: Gas,    density: 1.2,  color: (0, 0, 0, 0)),
+                Material(name: "stone",  state: Solid,  density: 2600, color: (1, 1, 1, 255)),
+                Material(name: "dirt",   state: Solid,  density: 1500, color: (2, 2, 2, 255)),
+                Material(name: "grass",  state: Solid,  density: 1300, color: (3, 3, 3, 255)),
+                Material(name: "sand",   state: Powder, density: 1600, color: (4, 4, 4, 255)),
+                Material(name: "water",  state: Liquid, density: 1000, color: (5, 5, 5, 255)),
+                Material(name: "marker", state: Solid,  density: 1000, color: (6, 6, 6, 255)),
+            ]"#,
+        )])
+        .unwrap();
+        let marker = MaterialId(6);
+        let origin = ChunkPos::new(0, 0, 0);
+        let p = WorldPos::from_chunk_local(origin, LocalPos::new(1, 2, 3));
+        let q = WorldPos::from_chunk_local(ChunkPos::new(1, 0, 0), LocalPos::new(5, 5, 5));
+        {
+            let store = Arc::new(ChunkStore::open(&dir, &registry).unwrap());
+            let mut s = streamer(1);
+            s.set_store(Arc::clone(&store));
+            let mut world = World::new();
+            run_until_idle(&mut s, origin, &mut world);
+            assert!(world.set_voxel(p, marker));
+            assert!(world.set_voxel(q, MaterialId::AIR) || world.voxel(q) == Some(MaterialId::AIR));
+            // Walking away writes the modified chunks to disk.
+            run_until_idle(&mut s, ChunkPos::new(30, 0, 0), &mut world);
+            assert!(store.contains(origin));
+            assert_eq!(s.stats().stashed, 0, "nothing kept in memory");
+        }
+        // A new session: same directory, fresh streamer and world.
+        let store = Arc::new(ChunkStore::open(&dir, &registry).unwrap());
+        let mut s = streamer(1);
+        s.set_store(store);
+        let mut world = World::new();
+        run_until_idle(&mut s, origin, &mut world);
+        assert_eq!(world.voxel(p), Some(marker));
+        assert_eq!(world.voxel(q), Some(MaterialId::AIR));
+        assert!(s.take_restored().contains(&origin));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

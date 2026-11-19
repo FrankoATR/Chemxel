@@ -8,14 +8,20 @@
 //! * [`stream`]: loads chunks around a centre in the background, unloads far ones.
 //! * [`raycast`]: voxel picking with a CPU DDA.
 //! * [`edit`]: editing tools (spherical brush).
+//! * [`persist`]: the versioned on-disk chunk format (palette + RLE).
+//! * [`store`]: saved chunks in a directory, used by streaming (ADR 011).
+//! * [`collide`]: moving a box (the player) through solid voxels.
 //! * [`testgen`]: small deterministic scenes for tests and benchmarks.
 //!
 //! This crate is headless: no rendering or windowing dependencies.
 
 mod brick_mask;
 mod chunk;
+pub mod collide;
 pub mod edit;
+pub mod persist;
 pub mod raycast;
+pub mod store;
 pub mod stream;
 pub mod terrain;
 pub mod testgen;

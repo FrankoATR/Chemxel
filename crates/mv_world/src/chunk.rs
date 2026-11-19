@@ -112,6 +112,8 @@ pub struct Chunk {
     /// Whether any voxel changed since the chunk was generated. Modified chunks must
     /// be kept (and later saved) instead of regenerated.
     modified: bool,
+    /// Whether it changed since it was last saved to disk.
+    unsaved: bool,
     /// Superset of the materials present: bit `id % 64` (see [`material_bit`]). Set
     /// on every write, recomputed exactly by [`Chunk::compact`]. Lets the simulation
     /// skip reaction lookups when no partner material is nearby.
@@ -136,6 +138,7 @@ impl Chunk {
             data: ChunkData::Uniform(material),
             dirty_bricks: BrickMask::FULL,
             modified: false,
+            unsaved: false,
             materials: material_bit(material),
         }
     }
@@ -146,6 +149,7 @@ impl Chunk {
             data: ChunkData::Bricks(bricks),
             dirty_bricks: BrickMask::FULL,
             modified: false,
+            unsaved: false,
             materials: u64::MAX,
         };
         chunk.compact();
@@ -182,6 +186,21 @@ impl Chunk {
 
     pub fn is_modified(&self) -> bool {
         self.modified
+    }
+
+    /// Marks the chunk as different from what the generator makes (e.g. loaded
+    /// from a save), so it is kept and saved instead of regenerated.
+    pub fn mark_modified(&mut self) {
+        self.modified = true;
+    }
+
+    /// Whether it changed since the last [`Chunk::mark_saved`].
+    pub fn is_unsaved(&self) -> bool {
+        self.unsaved
+    }
+
+    pub fn mark_saved(&mut self) {
+        self.unsaved = false;
     }
 
     /// Superset of the materials in the chunk, as a mask of [`material_bit`]s.
@@ -233,6 +252,7 @@ impl Chunk {
         }
         self.dirty_bricks.set(brick_index);
         self.modified = true;
+        self.unsaved = true;
         self.materials |= material_bit(material);
         true
     }
