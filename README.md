@@ -23,7 +23,7 @@ Minecraft (mundo por chunks, construcción).
 | 5 — Reacciones y fuego | ✅ Completado |
 | 6 — Integridad y rígidos | ✅ Completado |
 | 7 — Iluminación | ✅ Completado |
-| 8 — Jugador y guardado | ⬜ Pendiente |
+| 8 — Jugador y guardado | ✅ Completado |
 
 Hoy el juego genera un mundo procedural infinito (colinas, montañas, playas y mar) que se
 carga y descarga alrededor de la cámara en segundo plano, con 16 chunks (64 m) de distancia
@@ -42,6 +42,8 @@ GPU sobre brickmaps.
 
 La imagen tiene sombras del sol, oclusión ambiental, lava y fuego que brillan e iluminan
 lo que tienen cerca, agua, vapor y vidrio translúcidos, y niebla (F6 alterna la calidad).
+Se camina con colisión (saltar, subir escalones, nadar) o se vuela (F), y el mundo se
+guarda solo: al salir y volver a entrar todo sigue como estaba.
 
 Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~240 FPS volando a 20 m/s sobre el
 terreno con toda la iluminación (~470 sin ella). El detalle y las métricas de cada hito están en
@@ -97,6 +99,15 @@ cargo run --release -- --bench-fly        # 20 s; --bench-fly=60 para 60 s
 cargo run --release -- --bench-fly --lighting=off   # o shadows / full: coste de la iluminación
 ```
 
+Partidas: `saves/<mundo>/` (o `CHEMXEL_SAVES_DIR`). Se guarda cada minuto y al salir.
+
+```bash
+cargo run --release -- --world=isla      # otra partida (por defecto: default)
+cargo run --release -- --no-save         # no guardar nada esta vez
+```
+
+Los benchmarks no guardan, salvo que se indique `--world=`.
+
 Logs: variable `RUST_LOG`, p. ej. `RUST_LOG=chemxel=debug cargo run --release`.
 Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 
@@ -112,6 +123,8 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
   generación en paralelo.
 - **Controles:** velocidad de la cámara, sensibilidad del ratón.
 - **Pincel:** radio inicial y máximo, alcance, repeticiones por segundo.
+- **Jugador:** velocidad al caminar, salto, gravedad, altura de escalón, tamaño, empezar
+  caminando o volando; cada cuántos segundos se autoguarda (`world.autosave_seconds`).
 - **Integridad y física:** tamaño mínimo y máximo de las piezas que caen, profundidad del
   ancla bajo el terreno, gravedad, criterio de reposo, número máximo de cuerpos. Para medir FPS reales, pon
 `vsync: false`. Para usar otra carpeta de assets: variable de entorno `CHEMXEL_ASSETS_DIR`.
@@ -122,8 +135,10 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 |---|---|
 | `Click izq.` (ratón suelto) | Capturar el ratón (mirar con el ratón) |
 | `WASD` | Moverse |
-| `Espacio` / `Ctrl izq.` | Subir / bajar |
-| `Shift` | Más rápido |
+| `Espacio` | Saltar (caminando; nadar hacia arriba en el agua) · subir (volando) |
+| `Ctrl izq.` | Bajar (volando) |
+| `Shift` | Correr / volar más rápido |
+| `F` | Caminar ↔ volar (volando no hay colisión) |
 | `Click izq.` (mantener) | Quitar material (pincel esférico) |
 | `Click der.` (mantener) | Poner el material seleccionado (no pisa sólidos ni polvos) |
 | `Rueda` | Radio del pincel |

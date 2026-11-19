@@ -28,7 +28,11 @@ cargo run --release -- --bench-fire[=SECS]  # lo mismo en el juego
 cargo run --release -- --hot-reload         # recarga de RON también en release
 cargo run --release -- --bench-tower[=SECS] # torre con la base excavada (rígidos)
 cargo run --release -- --bench-fly --lighting=off  # (o shadows/full) coste de la iluminación
+cargo run --release -- --world=NOMBRE       # partida en saves/NOMBRE (--no-save: no guardar)
 ```
+
+Los benchmarks no guardan salvo con `--world=`; para pruebas, `CHEMXEL_SAVES_DIR` apunta a
+una carpeta temporal.
 
 Benchmarks siempre con el portátil enchufado: con batería los tiempos se multiplican
 ×2–2,5. Los benchmarks del juego abren una ventana; si el usuario la mueve o toca, la
@@ -43,12 +47,13 @@ Bash de la herramienta: `export PATH="$HOME/.cargo/bin:$PATH"`).
 crates/
   mv_core       coords (WorldPos/ChunkPos/LocalPos), constantes, FixedTimestep, Config, paths
   mv_materials  registro de materiales y reacciones (RON)
-  mv_world      Chunk 64³ por bricks, World (+colas), terrain, stream, raycast, edit, testgen
+  mv_world      Chunk 64³ por bricks, World (+colas), terrain, stream, raycast, edit,
+                persist (formato), store (disco), collide (caja del jugador), testgen
   mv_sim        simulación headless: autómata (3), temperatura (4), reacciones y fuego (5)
   mv_physics    cuerpos rígidos de vóxeles con rapier3d (hito 6)
   mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
-  mv_game       binario: App (loop), GameWorld (streaming+subida), Editor, Gui/overlay egui,
-                FlyController, InputState, BenchFly
+  mv_game       binario: App (loop), GameWorld (streaming+subida+guardado), Editor,
+                Gui/overlay egui, Player, FlyController, SaveSlot, InputState, BenchFly
 benches/        paquete mv_benches (Criterion)
 assets/         config.ron, materials/*.ron, reactions/*.ron, shaders/*.wgsl
 docs/decisions/ ADRs (NNN-titulo.md)
@@ -93,6 +98,20 @@ descarta el atraso (evita la espiral de muerte).
 - **`stream::Streamer`:** cilindro alrededor de la cámara, generación en rayon, resultados
   insertados en el hilo principal. Los chunks modificados que se descargan van a un stash.
 - **`raycast`:** DDA en `f64`. **`edit::fill_sphere`:** edita chunk a chunk.
+
+**Guardado (ADR 011):**
+- **`persist`:** formato `CXCH` versionado: paleta de nombres + RLE varint + Adler-32.
+- **`store::ChunkStore`:** un archivo por chunk modificado, escritura atómica.
+- **Streaming:** `Streamer::set_store` hace que cargue del disco y escriba al descargar.
+  `take_restored` lista los chunks devueltos, y la app llama a
+  `Simulation::chunk_restored` (temperaturas base, despertar).
+- **Marcas del `Chunk`:** `is_unsaved` / `mark_saved` (además de `is_modified`).
+- **Partida** (`mv_game::save`):
+  - `saves/<mundo>/world.ron` lleva versión, semilla y terreno (mandan sobre la config),
+    tick y jugador.
+  - Autoguardado sin cuerpos en vuelo; al salir, `Physics::settle_all` y guardar.
+- **`collide::move_box`:** caja eje a eje con escalones; sin cargar = sólido. Lo usa
+  `mv_game::player`.
 
 ### Simulación (`mv_sim`, ADR 006)
 

@@ -294,7 +294,7 @@ mod tests {
         });
         for i in 0..200u8 {
             c.set(
-                LocalPos::new(i % 64, 20 + i / 64, (i * 7) % 64),
+                LocalPos::new(i % 64, 20 + i / 64, ((u16::from(i) * 7) % 64) as u8),
                 MaterialId(2),
             );
         }
