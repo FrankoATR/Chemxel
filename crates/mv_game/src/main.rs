@@ -17,13 +17,38 @@ mod overlay;
 mod player;
 mod save;
 
+use std::path::Path;
+
 use anyhow::Context as _;
 use mv_materials::{MaterialRegistry, ReactionSet};
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() -> anyhow::Result<()> {
     logging::init();
+    let result = run();
+    if let Err(e) = &result {
+        // Opened by double-click, the console closes with the process: leave the
+        // reason in a file next to the executable.
+        let message = format!(
+            "Chemxel could not start or stopped with an error:
 
+{e:#}
+"
+        );
+        if let Some(dir) = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(Path::to_owned))
+        {
+            let path = dir.join("chemxel-error.log");
+            if std::fs::write(&path, &message).is_ok() {
+                eprintln!("(written to {})", path.display());
+            }
+        }
+    }
+    result
+}
+
+fn run() -> anyhow::Result<()> {
     let assets = mv_core::paths::assets_dir().context(
         "assets directory not found (run from the repository root or set CHEMXEL_ASSETS_DIR)",
     )?;
@@ -80,7 +105,7 @@ fn main() -> anyhow::Result<()> {
         !std::env::args().any(|a| a == "--no-save") && (!benchmark || named_world.is_some());
     let save = if saving {
         let name = named_world.unwrap_or_else(|| "default".to_owned());
-        let slot = save::SaveSlot::open(&mv_core::paths::saves_dir(), &name, &registry)?;
+        let slot = save::SaveSlot::open(&mv_core::paths::saves_dir(&assets), &name, &registry)?;
         let header = slot.load_header()?;
         if let Some(h) = &header {
             // The saved chunks were made with this terrain: keep it.

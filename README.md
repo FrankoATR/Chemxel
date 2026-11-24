@@ -99,7 +99,7 @@ cargo run --release -- --bench-fly        # 20 s; --bench-fly=60 para 60 s
 cargo run --release -- --bench-fly --lighting=off   # o shadows / full: coste de la iluminación
 ```
 
-Partidas: `saves/<mundo>/` (o `CHEMXEL_SAVES_DIR`). Se guarda cada minuto y al salir.
+Partidas: `saves/<mundo>/` en la carpeta del proyecto (o `CHEMXEL_SAVES_DIR`), tanto con `cargo run` como abriendo `target/release/chemxel.exe`. Se guarda cada minuto y al salir. Si el juego no arranca, el motivo queda en `chemxel-error.log` junto al ejecutable.
 
 ```bash
 cargo run --release -- --world=isla      # otra partida (por defecto: default)
