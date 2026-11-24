@@ -12,6 +12,9 @@ use crate::MatterState;
 pub(crate) struct Material {
     pub name: String,
     pub state: MatterState,
+    /// Inventory category (default: from the state, e.g. "Liquids").
+    #[serde(default)]
+    pub category: Option<String>,
     /// kg/m³. Decides who sinks and who floats.
     pub density: f32,
     /// sRGB colour with alpha (0 = fully transparent).

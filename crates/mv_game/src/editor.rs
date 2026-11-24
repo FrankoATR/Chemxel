@@ -35,19 +35,12 @@ pub struct Edit {
 pub struct Brush {
     pub radius: f32,
     pub max_radius: f32,
-    /// Index into [`Editor::placeable`].
-    pub selected: usize,
 }
 
-/// Placeable materials (everything but air) and, per material, whether `Place`
-/// may overwrite it (air, liquids, gases and energy such as fire).
-fn material_lists(registry: &MaterialRegistry) -> (Vec<MaterialId>, Vec<bool>) {
-    let placeable = registry
-        .iter()
-        .filter(|(id, _)| !id.is_air())
-        .map(|(id, _)| id)
-        .collect();
-    let overwritable = registry
+/// Per material: whether `Place` may overwrite it (air, liquids, gases and energy
+/// such as fire).
+fn overwritable_list(registry: &MaterialRegistry) -> Vec<bool> {
+    registry
         .iter()
         .map(|(id, m)| {
             id.is_air()
@@ -56,8 +49,7 @@ fn material_lists(registry: &MaterialRegistry) -> (Vec<MaterialId>, Vec<bool>) {
                     MatterState::Liquid | MatterState::Gas | MatterState::Energy
                 )
         })
-        .collect();
-    (placeable, overwritable)
+        .collect()
 }
 
 #[derive(Debug)]
@@ -65,8 +57,8 @@ pub struct Editor {
     pub brush: Brush,
     reach: f64,
     repeat: Duration,
-    /// Materials that can be placed (everything but air), in registry order.
-    placeable: Vec<MaterialId>,
+    /// What `Place` puts down (the selected hotbar slot; `None`: nothing).
+    material: Option<MaterialId>,
     /// Per material: may `Place` overwrite it? (air, liquids and gases).
     overwritable: Vec<bool>,
     target: Option<RayHit>,
@@ -76,51 +68,33 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(config: &EditorConfig, registry: &MaterialRegistry) -> Self {
-        let (placeable, overwritable) = material_lists(registry);
-        let selected = registry
-            .id("sand")
-            .and_then(|sand| placeable.iter().position(|&id| id == sand))
-            .unwrap_or(0);
         Self {
             brush: Brush {
                 radius: config.brush_radius,
                 max_radius: config.max_brush_radius,
-                selected,
             },
             reach: config.reach,
             repeat: Duration::from_secs_f32(1.0 / config.repeat_hz),
-            placeable,
-            overwritable,
+            material: None,
+            overwritable: overwritable_list(registry),
             target: None,
             held: None,
             since_last_stroke: Duration::ZERO,
         }
     }
 
-    pub fn placeable(&self) -> &[MaterialId] {
-        &self.placeable
+    /// Updates the material table after a hot reload.
+    pub fn set_materials(&mut self, registry: &MaterialRegistry) {
+        self.overwritable = overwritable_list(registry);
     }
 
-    /// Rebuilds the material lists after a hot reload, keeping the selection.
-    pub fn set_materials(&mut self, registry: &MaterialRegistry) {
-        let selected = self.selected_material();
-        let (placeable, overwritable) = material_lists(registry);
-        self.brush.selected = selected
-            .and_then(|m| placeable.iter().position(|&id| id == m))
-            .unwrap_or(0);
-        self.placeable = placeable;
-        self.overwritable = overwritable;
+    /// Sets what `Place` puts down (the selected hotbar slot).
+    pub fn set_material(&mut self, material: Option<MaterialId>) {
+        self.material = material.filter(|m| !m.is_air());
     }
 
     pub fn selected_material(&self) -> Option<MaterialId> {
-        self.placeable.get(self.brush.selected).copied()
-    }
-
-    /// Selects the `index`-th placeable material, if it exists.
-    pub fn select(&mut self, index: usize) {
-        if index < self.placeable.len() {
-            self.brush.selected = index;
-        }
+        self.material
     }
 
     /// Changes the radius by `steps` (mouse wheel notches).

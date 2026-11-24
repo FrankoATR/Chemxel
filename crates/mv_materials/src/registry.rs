@@ -54,6 +54,8 @@ pub struct Transition {
 pub struct Material {
     pub name: String,
     pub state: MatterState,
+    /// Inventory category.
+    pub category: String,
     pub density: f32,
     /// sRGB colour with alpha.
     pub color: [u8; 4],
@@ -344,6 +346,16 @@ fn resolve(
     Ok(Material {
         name: d.name.clone(),
         state: d.state,
+        category: d.category.clone().unwrap_or_else(|| {
+            match d.state {
+                MatterState::Solid => "Solids",
+                MatterState::Powder => "Powders",
+                MatterState::Liquid => "Liquids",
+                MatterState::Gas => "Gases",
+                MatterState::Energy => "Energy",
+            }
+            .to_owned()
+        }),
         density: d.density,
         color: [r, g, b, a],
         conductivity: d.conductivity,
@@ -487,6 +499,11 @@ mod tests {
         )
         .unwrap();
         let id = |n| reg.id(n).unwrap();
+        assert_eq!(
+            reg.get(id("fire")).category,
+            "Energy",
+            "default from the state"
+        );
         assert_eq!(reg.get(id("fire")).decays_into, id("smoke"));
         assert_eq!(reg.get(id("smoke")).decays_into, MaterialId::AIR);
         assert_eq!(reg.get(id("wood")).flame, Some(id("fire")));

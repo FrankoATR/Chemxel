@@ -29,6 +29,7 @@ cargo run --release -- --hot-reload         # recarga de RON también en release
 cargo run --release -- --bench-tower[=SECS] # torre con la base excavada (rígidos)
 cargo run --release -- --bench-fly --lighting=off  # (o shadows/full) coste de la iluminación
 cargo run --release -- --world=NOMBRE       # partida en saves/NOMBRE (--no-save: no guardar)
+cargo run --release -- --no-save --ui=inventory   # (o wheel) abre esa pantalla al arrancar
 ```
 
 Los benchmarks no guardan salvo con `--world=`; para pruebas, `CHEMXEL_SAVES_DIR` apunta a
@@ -53,7 +54,8 @@ crates/
   mv_physics    cuerpos rígidos de vóxeles con rapier3d (hito 6)
   mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
   mv_game       binario: App (loop), GameWorld (streaming+subida+guardado), Editor,
-                Gui/overlay egui, Player, FlyController, SaveSlot, InputState, BenchFly
+                Gui/overlay egui, Inventory (barra rápida, rueda Tab, catálogo Enter),
+                Player, FlyController, SaveSlot, InputState, BenchFly
 benches/        paquete mv_benches (Criterion)
 assets/         config.ron, materials/*.ron, reactions/*.ron, shaders/*.wgsl
 docs/decisions/ ADRs (NNN-titulo.md)

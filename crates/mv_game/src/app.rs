@@ -35,6 +35,7 @@ use crate::game_world::{self, GameWorld, SyncStats};
 use crate::gui::Gui;
 use crate::hot_reload::HotReload;
 use crate::input::InputState;
+use crate::inventory::{self, Inventory, Wheel};
 use crate::overlay::{self, OverlayData, Timings};
 use crate::player::Player;
 use crate::save::{PlayerState, SAVE_VERSION, SaveHeader, SaveSlot};
@@ -83,6 +84,11 @@ pub struct App {
     camera: Camera,
     fly: FlyController,
     editor: Editor,
+    inventory: Inventory,
+    wheel: Wheel,
+    inventory_screen: inventory::Screen,
+    /// Whether the mouse was captured when the inventory screen opened.
+    regrab_after_inventory: bool,
     player: Player,
     /// Where the world is saved (`None`: nothing is saved, e.g. benchmarks).
     save: Option<SaveSlot>,
@@ -131,6 +137,12 @@ impl App {
             hot_reload,
         } = materials;
         let editor = Editor::new(&config.editor, &registry);
+        let mut inventory = Inventory::new(&registry);
+        if let Some(h) = &header
+            && !h.hotbar.is_empty()
+        {
+            inventory.load_names(&h.hotbar, h.selected_slot, &registry);
+        }
         // Spawn: where the save left the player, or a few metres above the terrain.
         let mut player = Player::new(&config.controls, &registry, glam::DVec3::ZERO);
         match &header {
@@ -167,6 +179,10 @@ impl App {
             camera,
             fly,
             editor,
+            inventory,
+            wheel: Wheel::default(),
+            inventory_screen: inventory::Screen::default(),
+            regrab_after_inventory: false,
             player,
             save,
             since_autosave: Duration::ZERO,
@@ -261,6 +277,8 @@ impl App {
                     pitch: self.camera.pitch,
                     walking: self.player.walking,
                 },
+                hotbar: self.inventory.to_names(&self.registry),
+                selected_slot: self.inventory.selected,
             };
             let slot = self
                 .save
@@ -280,6 +298,32 @@ impl App {
                 self.last_save = Some((Instant::now(), chunks));
             }
             Err(e) => tracing::error!("saving failed: {e:#}"),
+        }
+    }
+
+    /// Opens a UI screen at start: `wheel` (pointing at slot 3) or `inventory`.
+    pub fn preview_ui(&mut self, which: &str) {
+        match which {
+            "wheel" => {
+                self.wheel.open();
+                self.wheel.add_motion(glam::Vec2::new(60.0, 0.0));
+            }
+            "inventory" => self.toggle_inventory(),
+            other => tracing::warn!("unknown --ui={other} (wheel, inventory)"),
+        }
+    }
+
+    /// Opens or closes the inventory screen. Opening frees the mouse (to drag
+    /// items); closing captures it again if it was captured before.
+    fn toggle_inventory(&mut self) {
+        self.wheel.cancel();
+        self.inventory_screen.toggle();
+        if self.inventory_screen.open {
+            self.regrab_after_inventory = self.cursor_grabbed;
+            self.input.release_all();
+            self.set_cursor_grab(false);
+        } else if self.regrab_after_inventory {
+            self.set_cursor_grab(true);
         }
     }
 
@@ -360,6 +404,7 @@ impl App {
         self.sim
             .set_materials(&registry, &reactions, &self.world.world);
         self.editor.set_materials(&registry);
+        self.inventory.set_materials(&registry);
         self.player.set_materials(&registry);
         if let Some(r) = self.running.as_mut() {
             r.renderer
@@ -450,7 +495,15 @@ impl App {
                 self.bench = None;
                 self.exit_requested = true;
             }
+        } else if self.inventory_screen.open {
+            // The mouse is free for the inventory; the view and the player stay.
+            self.input.take_mouse_delta();
         } else if self.player.walking {
+            if self.wheel.open {
+                // The mouse aims the wheel instead of turning the view.
+                let delta = self.input.take_mouse_delta();
+                self.wheel.add_motion(delta);
+            }
             self.fly
                 .look(&mut self.camera, &mut self.input, self.cursor_grabbed);
             self.player.walk(
@@ -461,6 +514,10 @@ impl App {
             );
             self.camera.position = self.player.eye_position();
         } else {
+            if self.wheel.open {
+                let delta = self.input.take_mouse_delta();
+                self.wheel.add_motion(delta);
+            }
             self.fly.update(
                 &mut self.camera,
                 &mut self.input,
@@ -471,6 +528,11 @@ impl App {
         }
 
         let t = Instant::now();
+        self.editor.set_material(self.inventory.current());
+        let editing = !self.wheel.open && !self.inventory_screen.open;
+        if !editing {
+            self.editor.set_held(None);
+        }
         if let Some(edit) = self.editor.update(&mut self.world.world, &self.camera, dt) {
             self.sim
                 .edited(&self.world.world, edit.min, edit.max, edit.placed);
@@ -549,14 +611,26 @@ impl App {
             };
             let editor = &mut self.editor;
             let (show_overlay, grabbed) = (self.show_overlay, self.cursor_grabbed);
-            running.gui.run(&running.window, |ctx| {
+            let inv = &mut self.inventory;
+            let wheel = &self.wheel;
+            let screen = &mut self.inventory_screen;
+            let mut screen_closed = false;
+            let registry = &self.registry;
+            let frame = running.gui.run(&running.window, |ctx| {
                 if show_overlay {
                     actions = overlay::draw(ctx, &data, editor);
                 }
-                if grabbed {
+                inventory::hud(ctx, inv, registry);
+                if wheel.open {
+                    inventory::wheel(ctx, inv, wheel, registry);
+                } else if screen.open {
+                    screen_closed = !inventory::screen(ctx, inv, screen, registry);
+                } else if grabbed {
                     overlay::crosshair(ctx);
                 }
-            })
+            });
+            actions.close_inventory |= screen_closed;
+            frame
         };
 
         self.apply_overlay_actions(actions);
@@ -625,6 +699,9 @@ impl App {
     }
 
     fn apply_overlay_actions(&mut self, actions: overlay::OverlayActions) {
+        if actions.close_inventory && self.inventory_screen.open {
+            self.toggle_inventory();
+        }
         if actions.save_now {
             self.save_world(false);
         }
@@ -666,8 +743,50 @@ impl App {
 
     fn on_key(&mut self, event_loop: &ActiveEventLoop, key: KeyCode, state: ElementState) {
         let pressed = state == ElementState::Pressed;
+        // While the inventory screen is open only its keys do something.
+        if self.inventory_screen.open {
+            if pressed {
+                match key {
+                    KeyCode::Escape | KeyCode::Enter | KeyCode::NumpadEnter => {
+                        self.toggle_inventory();
+                    }
+                    _ => {
+                        if let Some(index) = digit_index(key) {
+                            self.inventory.select(index);
+                        }
+                    }
+                }
+            } else {
+                self.input.set_key(key, false);
+            }
+            return;
+        }
+        // The selection wheel: open while Tab is held, pick on release.
+        if key == KeyCode::Tab && self.bench.is_none() && self.bench_drop.is_none() {
+            if pressed {
+                self.wheel.open();
+                self.editor.set_held(None);
+            } else if self.wheel.open
+                && let Some(slot) = self.wheel.close()
+            {
+                self.inventory.select(slot);
+            } else {
+                self.wheel.cancel();
+            }
+            return;
+        }
         if pressed {
             match key {
+                KeyCode::Enter | KeyCode::NumpadEnter
+                    if self.bench.is_none() && self.bench_drop.is_none() =>
+                {
+                    self.toggle_inventory();
+                    return;
+                }
+                KeyCode::Escape if self.wheel.open => {
+                    self.wheel.cancel();
+                    return;
+                }
                 KeyCode::Escape => {
                     if self.cursor_grabbed {
                         self.set_cursor_grab(false);
@@ -713,7 +832,8 @@ impl App {
                 }
                 _ => {
                     if let Some(index) = digit_index(key) {
-                        self.editor.select(index);
+                        self.inventory.select(index);
+                        self.wheel.cancel();
                     }
                 }
             }
@@ -723,6 +843,20 @@ impl App {
 
     fn on_mouse_button(&mut self, button: MouseButton, state: ElementState) {
         let pressed = state == ElementState::Pressed;
+        if self.inventory_screen.open {
+            // The mouse belongs to the inventory (egui) until it closes.
+            return;
+        }
+        if self.wheel.open {
+            if pressed && button == MouseButton::Left {
+                if let Some(slot) = self.wheel.close() {
+                    self.inventory.select(slot);
+                } else {
+                    self.wheel.cancel();
+                }
+            }
+            return;
+        }
         if !self.cursor_grabbed {
             if pressed && button == MouseButton::Left {
                 self.set_cursor_grab(true);
@@ -778,8 +912,13 @@ impl ApplicationHandler for App {
                     },
                 ..
             } => {
-                // Releases always go through so no key stays stuck.
-                if !ui_consumed || state == ElementState::Released {
+                // Releases always go through so no key stays stuck, and the
+                // inventory keys work even when the UI has the keyboard focus.
+                let inventory_key = matches!(
+                    key,
+                    KeyCode::Tab | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
+                );
+                if !ui_consumed || state == ElementState::Released || inventory_key {
                     self.on_key(event_loop, key, state);
                 }
             }

@@ -11,6 +11,7 @@ mod game_world;
 mod gui;
 mod hot_reload;
 mod input;
+mod inventory;
 mod logging;
 mod overlay;
 mod player;
@@ -116,6 +117,10 @@ fn main() -> anyhow::Result<()> {
     };
     let mut app = app::App::new(config, materials, world, bench, bench_drop, save);
     app.set_lighting_preset(lighting_preset);
+    // `--ui=wheel|inventory` opens that screen at start (for screenshots and tests).
+    if let Some(ui) = std::env::args().find_map(|a| a.strip_prefix("--ui=").map(str::to_owned)) {
+        app.preview_ui(&ui);
+    }
     event_loop
         .run_app(&mut app)
         .context("running the event loop")?;

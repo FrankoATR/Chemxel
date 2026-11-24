@@ -74,6 +74,8 @@ pub struct OverlayActions {
     pub forest_fire: bool,
     pub tower: bool,
     pub save_now: bool,
+    /// The inventory screen's close button was used.
+    pub close_inventory: bool,
     pub toggle_pause: bool,
 }
 
@@ -342,33 +344,24 @@ fn brush(ui: &mut egui::Ui, registry: &MaterialRegistry, editor: &mut Editor) {
     ui.label("Brush");
     let max = editor.brush.max_radius;
     ui.add(egui::Slider::new(&mut editor.brush.radius, 1.0..=max).text("radius (voxels)"));
-    let mut selected = None;
-    ui.horizontal_wrapped(|ui| {
-        for (i, &id) in editor.placeable().iter().enumerate() {
+    let current = editor.selected_material().map_or_else(
+        || egui::RichText::new("empty slot"),
+        |id| {
             let m = registry.get(id);
             let [r, g, b, _] = m.color;
-            let label = if i < 9 {
-                format!("{} {}", i + 1, m.name)
-            } else {
-                m.name.clone()
-            };
-            let text = egui::RichText::new(label).color(egui::Color32::from_rgb(r, g, b));
-            if ui
-                .selectable_label(editor.brush.selected == i, text)
-                .clicked()
-            {
-                selected = Some(i);
-            }
-        }
+            egui::RichText::new(&m.name).color(egui::Color32::from_rgb(r, g, b))
+        },
+    );
+    ui.horizontal(|ui| {
+        ui.label("Material:");
+        ui.label(current);
     });
-    if let Some(i) = selected {
-        editor.select(i);
-    }
+    ui.small("1–8 hotbar · hold Tab: wheel · Enter: inventory");
 }
 
 fn help(ui: &mut egui::Ui, grabbed: bool) {
     let text = if grabbed {
-        "LMB remove · RMB place · wheel radius · 1-9 material · P pause sim\nWASD move · Space jump/up · Ctrl down · Shift fast · F walk/fly · Esc release mouse · F3 overlay · F5 heat view · F6 lighting"
+        "LMB remove · RMB place · wheel radius · 1-8 slot · Tab wheel · Enter inventory · P pause sim\nWASD move · Space jump/up · Ctrl down · Shift fast · F walk/fly · Esc release mouse · F3 overlay · F5 heat view · F6 lighting"
     } else {
         "Click the world to capture the mouse · Esc quits · F3 overlay"
     };

@@ -34,6 +34,12 @@ pub struct SaveHeader {
     pub world: WorldConfig,
     pub tick: u64,
     pub player: PlayerState,
+    /// Hotbar contents by material name, and the selected slot (absent in saves
+    /// from before the inventory: the defaults are used).
+    #[serde(default)]
+    pub hotbar: Vec<Option<String>>,
+    #[serde(default)]
+    pub selected_slot: usize,
 }
 
 /// An open save slot.
@@ -129,6 +135,8 @@ mod tests {
                 pitch: -0.2,
                 walking: true,
             },
+            hotbar: vec![Some("stone".to_owned()), None],
+            selected_slot: 3,
         };
         slot.write_header(&header).unwrap();
         assert_eq!(slot.load_header().unwrap(), Some(header.clone()));

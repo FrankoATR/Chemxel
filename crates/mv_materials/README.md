@@ -32,6 +32,7 @@ Registro de materiales y reacciones de Chemxel.
 |---|---|---|---|
 | `name` | texto | — (obligatorio) | Identificador único |
 | `state` | `Solid` \| `Powder` \| `Liquid` \| `Gas` \| `Energy` | — (obligatorio) | Comportamiento físico |
+| `category` | texto | según `state` (`Solids`, `Powders`, `Liquids`, `Gases`, `Energy`) | Pestaña del inventario donde aparece |
 | `density` | número | — (obligatorio) | kg/m³; decide quién se hunde y quién flota |
 | `color` | `(r, g, b, a)` 0–255 | — (obligatorio) | Color sRGB; `a` < 255 = translúcido |
 | `conductivity` | número | `0` | Conductividad térmica, W/(m·K) |

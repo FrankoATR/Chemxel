@@ -142,7 +142,9 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 | `Click izq.` (mantener) | Quitar material (pincel esférico) |
 | `Click der.` (mantener) | Poner el material seleccionado (no pisa sólidos ni polvos) |
 | `Rueda` | Radio del pincel |
-| `1`–`9` | Material (también desde el overlay, con el ratón suelto) |
+| `1`–`8` | Casilla de la barra rápida (el material que pone el pincel) |
+| `Tab` (mantener) | Rueda de selección: mover el ratón hacia una casilla y soltar `Tab` (o clic); `1`–`8` también |
+| `Enter` | Inventario: todos los materiales por categorías (8×8); arrastrar a la barra rápida, entre casillas o fuera para vaciar; clic derecho vacía; `Enter`/`Esc` cierra |
 | `F3` | Mostrar/ocultar el overlay de depuración (con los escenarios "Drop 100k sand + water", "Lava on ice", "Forest fire" y "Tower collapse") |
 | `P` | Pausar/reanudar la simulación |
 | `F5` | Vista de calor (azul frío · gris ambiente · amarillo 100 °C · naranja · blanco) |
