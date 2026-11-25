@@ -9,9 +9,11 @@
 //! (`x + y*8 + z*64`); bricks by [`LocalPos::brick_index`]. Iterate bricks in index
 //! order and voxels `z`, `y`, `x` (outer to inner) to walk memory sequentially.
 //!
-//! Only the material channel exists for now. Temperature, per-voxel flags, the
-//! active/sleeping state and the dirty AABB (`PROMPT.md` §5.2) are added by the
-//! milestones that need them.
+//! Besides the material, liquid voxels have a fill level (ADR 014): how much of the
+//! voxel the liquid fills, in [`LEVELS`] steps. Levels are stored apart, per brick and
+//! only where some voxel is partly filled; a voxel without a stored level is full.
+//! Partly filled voxels always live in dense bricks, so a uniform brick or chunk is
+//! always full.
 
 use mv_core::consts::{BRICK_VOLUME, BRICKS_PER_CHUNK};
 use mv_core::{ChunkPos, LocalPos, WorldPos};
@@ -21,6 +23,15 @@ use crate::BrickMask;
 
 /// Voxels of one dense brick, in brick-local order.
 pub type BrickVoxels = [MaterialId; BRICK_VOLUME];
+
+/// Fill levels of a liquid voxel: 1..=`LEVELS`, `LEVELS` being full. Fine steps,
+/// so a lake that stops levelling (neighbours within one level) is flat to within
+/// 1/255 of a voxel per cell.
+pub const LEVELS: u8 = 255;
+
+/// Stored fill levels of one brick (0 = full), in brick-local order.
+pub type BrickLevels = [u8; BRICK_VOLUME];
+type LevelTable = [Option<Box<BrickLevels>>; BRICKS_PER_CHUNK];
 
 /// One 8³ brick.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +129,8 @@ pub struct Chunk {
     /// on every write, recomputed exactly by [`Chunk::compact`]. Lets the simulation
     /// skip reaction lookups when no partner material is nearby.
     materials: u64,
+    /// Fill levels of partly filled liquid voxels, per brick (`None`: all full).
+    levels: Option<Box<LevelTable>>,
 }
 
 /// Bit of `m` in a material mask (ids above 63 alias, which only adds false
@@ -140,6 +153,7 @@ impl Chunk {
             modified: false,
             unsaved: false,
             materials: material_bit(material),
+            levels: None,
         }
     }
 
@@ -151,6 +165,7 @@ impl Chunk {
             modified: false,
             unsaved: false,
             materials: u64::MAX,
+            levels: None,
         };
         chunk.compact();
         chunk
@@ -217,10 +232,82 @@ impl Chunk {
         }
     }
 
-    /// Writes one voxel, expanding uniform storage as needed. Marks the containing
-    /// brick dirty and the chunk modified only if the value actually changed.
-    /// Returns whether it changed.
+    /// Fill level of the voxel at `pos`, 1..=[`LEVELS`] (full unless it is a partly
+    /// filled liquid).
+    #[inline]
+    pub fn level(&self, pos: LocalPos) -> u8 {
+        match self.stored_level(pos) {
+            0 => LEVELS,
+            l => l,
+        }
+    }
+
+    #[inline]
+    fn stored_level(&self, pos: LocalPos) -> u8 {
+        self.levels
+            .as_ref()
+            .and_then(|t| t[pos.brick_index()].as_deref())
+            .map_or(0, |l| l[pos.brick_local_index()])
+    }
+
+    /// Stored levels of brick `index` (0 = full), if any voxel of it is partly
+    /// filled.
+    #[inline]
+    pub fn brick_levels(&self, index: usize) -> Option<&BrickLevels> {
+        self.levels.as_ref().and_then(|t| t[index].as_deref())
+    }
+
+    /// Whether some voxel is partly filled.
+    pub fn has_levels(&self) -> bool {
+        self.levels.is_some()
+    }
+
+    /// Writes one full voxel (see [`Chunk::set_with_level`]).
+    #[inline]
     pub fn set(&mut self, pos: LocalPos, material: MaterialId) -> bool {
+        self.set_with_level(pos, material, LEVELS)
+    }
+
+    /// Writes one voxel with fill level `level` (1..=[`LEVELS`]; only meaningful for
+    /// liquids), expanding uniform storage as needed. Marks the containing brick
+    /// dirty and the chunk modified only if something actually changed. Returns
+    /// whether it changed.
+    pub fn set_with_level(&mut self, pos: LocalPos, material: MaterialId, level: u8) -> bool {
+        let stored = if level == LEVELS { 0 } else { level.max(1) };
+        let old = self.stored_level(pos);
+        let mut changed = self.set_material(pos, material);
+        if stored != old {
+            let b = pos.brick_index();
+            if stored != 0 {
+                self.densify(b);
+            }
+            let table = self
+                .levels
+                .get_or_insert_with(|| Box::new(std::array::from_fn(|_| None)));
+            table[b].get_or_insert_with(|| Box::new([0; BRICK_VOLUME]))[pos.brick_local_index()] =
+                stored;
+            self.dirty_bricks.set(b);
+            self.modified = true;
+            self.unsaved = true;
+            changed = true;
+        }
+        changed
+    }
+
+    /// Makes brick `index` dense (same contents), so it can hold fill levels.
+    fn densify(&mut self, index: usize) {
+        if let ChunkData::Uniform(m) = self.data {
+            self.data = ChunkData::Bricks(uniform_table(m));
+        }
+        if let ChunkData::Bricks(bricks) = &mut self.data
+            && let Brick::Uniform(m) = bricks[index]
+        {
+            bricks[index] = Brick::Dense(Box::new([m; BRICK_VOLUME]));
+        }
+    }
+
+    /// Writes the material of one voxel (levels untouched).
+    fn set_material(&mut self, pos: LocalPos, material: MaterialId) -> bool {
         let bricks = match &mut self.data {
             ChunkData::Uniform(m) if *m == material => return false,
             ChunkData::Uniform(m) => {
@@ -275,10 +362,25 @@ impl Chunk {
     /// Returns `true` if the chunk is uniform afterwards. Does not touch the dirty
     /// mask.
     pub fn compact(&mut self) -> bool {
+        // Levels of bricks that are all full again are dropped.
+        if let Some(table) = &mut self.levels {
+            for levels in table.iter_mut() {
+                if levels.as_ref().is_some_and(|l| l.iter().all(|&v| v == 0)) {
+                    *levels = None;
+                }
+            }
+            if table.iter().all(Option::is_none) {
+                self.levels = None;
+            }
+        }
+        let levels = self.levels.as_deref();
         if let ChunkData::Bricks(bricks) = &mut self.data {
             let mut mask = 0;
-            for brick in bricks.iter_mut() {
-                brick.compact();
+            for (i, brick) in bricks.iter_mut().enumerate() {
+                // Bricks with partly filled voxels stay dense.
+                if levels.is_none_or(|t| t[i].is_none()) {
+                    brick.compact();
+                }
                 mask |= match brick {
                     Brick::Uniform(m) => material_bit(*m),
                     Brick::Dense(v) => v.iter().fold(0, |acc, &m| acc | material_bit(m)),
@@ -286,6 +388,7 @@ impl Chunk {
             }
             self.materials = mask;
             if let Brick::Uniform(first) = bricks[0]
+                && levels.is_none()
                 && bricks.iter().all(|b| *b == Brick::Uniform(first))
             {
                 self.data = ChunkData::Uniform(first);
@@ -342,8 +445,13 @@ impl Chunk {
         match &self.data {
             ChunkData::Uniform(_) => 0,
             ChunkData::Bricks(_) => {
+                let levels = self.levels.as_ref().map_or(0, |t| {
+                    std::mem::size_of::<LevelTable>()
+                        + t.iter().flatten().count() * std::mem::size_of::<BrickLevels>()
+                });
                 std::mem::size_of::<BrickTable>()
                     + self.dense_bricks() * std::mem::size_of::<BrickVoxels>()
+                    + levels
             }
         }
     }
@@ -355,6 +463,33 @@ mod tests {
 
     const STONE: MaterialId = MaterialId(1);
     const SAND: MaterialId = MaterialId(2);
+
+    #[test]
+    fn fill_levels_densify_survive_compact_and_reset_when_full() {
+        const WATER: MaterialId = MaterialId(3);
+        let mut c = Chunk::uniform(WATER);
+        let p = LocalPos::new(9, 10, 11);
+        assert_eq!(c.level(p), LEVELS);
+        c.take_dirty_bricks();
+        assert!(c.set_with_level(p, WATER, 5));
+        assert_eq!(c.level(p), 5);
+        assert!(
+            c.has_levels() && c.as_uniform().is_none(),
+            "partly filled: dense"
+        );
+        assert!(c.dirty_bricks().get(p.brick_index()));
+        c.compact();
+        assert_eq!(c.level(p), 5, "compact keeps the level and the dense brick");
+        assert!(c.as_uniform().is_none());
+        // Same material and level: no change.
+        assert!(!c.set_with_level(p, WATER, 5));
+        // Any full write resets it, and compact drops the levels again.
+        assert!(c.set(p, WATER));
+        assert_eq!(c.level(p), LEVELS);
+        c.compact();
+        assert!(!c.has_levels());
+        assert_eq!(c.as_uniform(), Some(WATER));
+    }
 
     #[test]
     fn uniform_get_and_noop_set() {

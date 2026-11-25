@@ -6,6 +6,9 @@
 //! palette   u16 LE count, then per entry: u8 length + UTF-8 material name
 //! voxels    runs of (palette index, run length), both LEB128 varints, covering
 //!           the 512 bricks × 512 voxels in storage order (brick, then voxel)
+//! levels    (version ≥ 2) u16 LE count of bricks with partly filled liquid voxels,
+//!           then per brick: u16 LE brick index and runs of (stored level, run
+//!           length) varints covering its 512 voxels (0 = full; ADR 014)
 //! checksum  u32 LE   Adler-32 of everything before it
 //! ```
 //!
@@ -18,7 +21,7 @@ use mv_core::consts::{BRICK_VOLUME, BRICKS_PER_CHUNK};
 use crate::{Brick, BrickRef, Chunk, MaterialId};
 
 pub const CHUNK_MAGIC: [u8; 4] = *b"CXCH";
-pub const CHUNK_VERSION: u16 = 1;
+pub const CHUNK_VERSION: u16 = 2;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PersistError {
@@ -84,6 +87,25 @@ pub fn encode_chunk<'n>(chunk: &Chunk, name: impl Fn(MaterialId) -> &'n str) -> 
     if let Some((i, n)) = current {
         write_varint(&mut runs, i);
         write_varint(&mut runs, n);
+    }
+    // Fill levels of the bricks that have any.
+    let with_levels: Vec<usize> = (0..BRICKS_PER_CHUNK)
+        .filter(|&b| chunk.brick_levels(b).is_some())
+        .collect();
+    runs.extend_from_slice(&(with_levels.len() as u16).to_le_bytes());
+    for b in with_levels {
+        let Some(levels) = chunk.brick_levels(b) else {
+            continue;
+        };
+        runs.extend_from_slice(&(b as u16).to_le_bytes());
+        let mut i = 0;
+        while i < levels.len() {
+            let v = levels[i];
+            let n = levels[i..].iter().take_while(|&&l| l == v).count();
+            write_varint(&mut runs, u64::from(v));
+            write_varint(&mut runs, n as u64);
+            i += n;
+        }
     }
 
     let mut out = Vec::with_capacity(16 + palette.len() * 8 + runs.len());
@@ -166,14 +188,39 @@ pub fn decode_chunk(
             }
         }
     }
-    if r.pos != body.len() {
-        return Err(PersistError::Malformed("trailing data"));
-    }
     let table: Box<crate::BrickTable> = bricks
         .into_boxed_slice()
         .try_into()
         .map_err(|_| PersistError::Malformed("wrong brick count"))?;
     let mut chunk = Chunk::from_bricks(table);
+    if version >= 2 {
+        let count = r.u16()? as usize;
+        for _ in 0..count {
+            let b = r.u16()? as usize;
+            if b >= BRICKS_PER_CHUNK {
+                return Err(PersistError::Malformed("brick index out of range"));
+            }
+            let mut at = 0;
+            while at < BRICK_VOLUME {
+                let level = r.varint()?;
+                let len = r.varint()? as usize;
+                if len == 0 || at + len > BRICK_VOLUME || level >= u64::from(crate::LEVELS) {
+                    return Err(PersistError::Malformed("bad level run"));
+                }
+                if level != 0 {
+                    for local in at..at + len {
+                        let pos = mv_core::LocalPos::from_brick(b, local);
+                        let m = chunk.get(pos);
+                        chunk.set_with_level(pos, m, level as u8);
+                    }
+                }
+                at += len;
+            }
+        }
+    }
+    if r.pos != body.len() {
+        return Err(PersistError::Malformed("trailing data"));
+    }
     chunk.mark_modified();
     Ok(Decoded {
         chunk,
@@ -267,9 +314,38 @@ mod tests {
     fn same(a: &Chunk, b: &Chunk) -> bool {
         (0..64u8).all(|z| {
             (0..64u8).all(|y| {
-                (0..64u8).all(|x| a.get(LocalPos::new(x, y, z)) == b.get(LocalPos::new(x, y, z)))
+                (0..64u8).all(|x| {
+                    let p = LocalPos::new(x, y, z);
+                    a.get(p) == b.get(p) && a.level(p) == b.level(p)
+                })
             })
         })
+    }
+
+    #[test]
+    fn fill_levels_round_trip_and_version_1_files_load_full() {
+        let water = MaterialId(3);
+        let mut c = Chunk::from_fn(ChunkPos::new(0, 0, 0), |w| {
+            if w.0.y < 10 { water } else { MaterialId::AIR }
+        });
+        for x in 0..64 {
+            c.set_with_level(LocalPos::new(x, 10, 7), water, 1 + x * 3);
+        }
+        let bytes = encode_chunk(&c, name);
+        let d = decode_chunk(&bytes, id).unwrap();
+        assert!(same(&c, &d.chunk));
+        assert_eq!(d.chunk.level(LocalPos::new(3, 10, 7)), 10);
+
+        // A version 1 file: no levels section.
+        let full = Chunk::from_fn(ChunkPos::new(0, 0, 0), |w| {
+            if w.0.y < 10 { water } else { MaterialId::AIR }
+        });
+        let v2 = encode_chunk(&full, name);
+        let mut v1 = v2[..v2.len() - 4 - 2].to_vec();
+        v1[4..6].copy_from_slice(&1u16.to_le_bytes());
+        let sum = adler32(&v1);
+        v1.extend_from_slice(&sum.to_le_bytes());
+        assert!(same(&full, &decode_chunk(&v1, id).unwrap().chunk));
     }
 
     #[test]

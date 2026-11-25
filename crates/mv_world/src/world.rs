@@ -96,6 +96,25 @@ impl World {
         self.chunks.get(&c).map(|chunk| chunk.get(l))
     }
 
+    /// Fill level of the voxel at `pos` (1..=`LEVELS`), if loaded.
+    pub fn level(&self, pos: WorldPos) -> Option<u8> {
+        let (c, l) = pos.to_chunk_local();
+        self.chunks.get(&c).map(|chunk| chunk.level(l))
+    }
+
+    /// Writes one voxel with a fill level (see [`Chunk::set_with_level`]).
+    pub fn set_voxel_level(&mut self, pos: WorldPos, material: MaterialId, level: u8) -> bool {
+        let (c, l) = pos.to_chunk_local();
+        let changed = self
+            .chunks
+            .get_mut(&c)
+            .is_some_and(|chunk| chunk.set_with_level(l, material, level));
+        if changed {
+            self.mark_edited(c);
+        }
+        changed
+    }
+
     /// Writes one voxel. Returns whether it changed (false if not loaded).
     pub fn set_voxel(&mut self, pos: WorldPos, material: MaterialId) -> bool {
         let (c, l) = pos.to_chunk_local();
