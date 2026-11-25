@@ -46,6 +46,25 @@ pub(crate) struct Material {
     /// What the voxel becomes when its lifetime expires (default: air).
     #[serde(default)]
     pub decays_into: Option<String>,
+    /// Liquids: what a loose surface voxel (a drop, a bump, the rim of a hole in an
+    /// incomplete top layer) turns into while at rest, and the chance per tick.
+    #[serde(default)]
+    pub evaporates_into: Option<String>,
+    #[serde(default)]
+    pub evaporate_rate: f32,
+    /// Gases: at or above this world height (voxels) the voxel turns into
+    /// `ceiling_into` (vapour becoming cloud).
+    #[serde(default)]
+    pub ceiling: Option<i32>,
+    #[serde(default)]
+    pub ceiling_into: Option<String>,
+    /// Gases: whether the voxel moves at all (false: a still cloud).
+    #[serde(default = "default_true")]
+    pub drifts: bool,
+    /// Gases: whether it drifts sideways when it cannot rise (false: vapour trapped
+    /// under a roof stays put instead of wandering).
+    #[serde(default = "default_true")]
+    pub spreads: bool,
     /// Temperature the material is created at and tends to (°C).
     #[serde(default)]
     pub base_temperature: Option<f32>,
@@ -83,4 +102,8 @@ pub(crate) struct Material {
 
 fn default_heat_capacity() -> f32 {
     1.0
+}
+
+fn default_true() -> bool {
+    true
 }

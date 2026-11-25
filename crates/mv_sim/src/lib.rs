@@ -66,6 +66,8 @@ pub struct TickStats {
     pub reactions: u32,
     /// Voxels whose lifetime expired.
     pub decays: u32,
+    /// Loose liquid voxels that evaporated or crusted over.
+    pub evaporations: u32,
     /// Flames emitted by burning voxels.
     pub flames: u32,
     /// Voxels visited by the structural integrity flood fill.
@@ -118,7 +120,15 @@ pub struct Simulation {
     integrity: integrity::Integrity,
     /// Floating pieces cut out of the grid, waiting for the physics engine.
     detached: Vec<VoxelBody>,
+    /// Chunks that may hold still voxels with a lifetime (clouds), faded by the slow
+    /// pass every `SLOW_PERIOD` ticks instead of being scanned every tick.
+    still_decay: std::collections::HashSet<ChunkPos>,
 }
+
+/// Ticks between slow passes (fading clouds).
+const SLOW_PERIOD: u64 = 300;
+/// How far below a ceiling condensing vapour looks for room in the cloud layer.
+const CLOUD_DEPTH: i64 = 24;
 
 impl Simulation {
     pub fn new(registry: &MaterialRegistry, reactions: &ReactionSet, config: &SimConfig) -> Self {
@@ -174,6 +184,7 @@ impl Simulation {
                 config.integrity_natural_period,
             ),
             detached: Vec::new(),
+            still_decay: std::collections::HashSet::new(),
         }
     }
 
@@ -208,6 +219,8 @@ impl Simulation {
     pub fn chunk_restored(&mut self, world: &World, pos: ChunkPos) {
         let origin = pos.origin().0;
         self.wake_box(world, WorldPos(origin), WorldPos(origin + 63));
+        // Clouds in it keep fading.
+        self.still_decay.insert(pos);
         let Some(chunk) = world.chunk(pos) else {
             return;
         };
@@ -321,6 +334,19 @@ impl Simulation {
         let (lo, hi) = (min.0.min(max.0), min.0.max(max.0));
         if placed.is_none() {
             self.integrity.push(lo, hi);
+        }
+        if let Some(m) = placed {
+            let p = self.table.get(m);
+            if p.decay != 0 && !p.drifts && p.kind == Kind::Gas {
+                let (clo, chi) = (WorldPos(lo).chunk().0, WorldPos(hi).chunk().0);
+                for cz in clo.z..=chi.z {
+                    for cy in clo.y..=chi.y {
+                        for cx in clo.x..=chi.x {
+                            self.still_decay.insert(ChunkPos::new(cx, cy, cz));
+                        }
+                    }
+                }
+            }
         }
         let needs_field = placed.is_some_and(|m| {
             self.table.thermal(m).base_temperature.is_some()
@@ -482,6 +508,10 @@ impl Simulation {
                 stats.moves += out.moves;
                 stats.reactions += out.reactions;
                 stats.decays += out.decays;
+                stats.evaporations += out.evaporations;
+                for &(x, z, m) in &out.deposits {
+                    self.deposit_at_ceiling(world, x, z, m);
+                }
                 let origin = pos.origin().0;
                 for p in &out.solid_lost {
                     self.integrity.push_natural(origin + p.as_i64vec3());
@@ -531,12 +561,93 @@ impl Simulation {
         stats.thermal_ms = (t_integrity - t_thermal).as_secs_f32() * 1000.0;
         stats.transitions = transitions;
         stats.flames = flames;
+        if self.tick.is_multiple_of(SLOW_PERIOD) {
+            self.slow_pass(world);
+        }
         let (visited, detached) = self.integrity_step(world);
         stats.integrity_ms = t_integrity.elapsed().as_secs_f32() * 1000.0;
         stats.integrity_visited = visited;
         stats.detached = detached;
         stats.thermal_chunks = self.thermal.len();
         self.stats = stats;
+    }
+
+    /// Places `m` (a cloud) in column `(x, z)` at its ceiling height, or in the first
+    /// air below it (the layer thickens downwards). Dropped if there is no room or
+    /// the chunk is not loaded. Clouds are still, so the simulation is not woken.
+    fn deposit_at_ceiling(&mut self, world: &mut World, x: i64, z: i64, m: MaterialId) {
+        let Some(ceiling) = self.ceiling_of(m) else {
+            return;
+        };
+        for y in (ceiling - CLOUD_DEPTH..=ceiling).rev() {
+            let pos = WorldPos::new(x, y, z);
+            match world.voxel(pos) {
+                Some(v) if v.is_air() => {
+                    world.set_voxel(pos, m);
+                    self.still_decay.insert(pos.chunk());
+                    return;
+                }
+                Some(v) if v == m => {}
+                _ => return,
+            }
+        }
+    }
+
+    /// The ceiling height of the gas that condenses into `cloud`.
+    fn ceiling_of(&self, cloud: MaterialId) -> Option<i64> {
+        (0..self.table.len())
+            .map(|i| self.table.get(MaterialId(i as u16)))
+            .find(|p| p.ceiling != i64::MAX && p.ceiling_into == cloud)
+            .map(|p| p.ceiling)
+    }
+
+    /// Fades still voxels with a lifetime (clouds) in the chunks that hold them:
+    /// each has the chance of decaying over `SLOW_PERIOD` ticks.
+    fn slow_pass(&mut self, world: &mut World) {
+        let _span = tracing::trace_span!("slow_pass", chunks = self.still_decay.len()).entered();
+        let table = Arc::clone(&self.table);
+        let chunks: Vec<ChunkPos> = self.still_decay.iter().copied().collect();
+        for pos in chunks {
+            let Some(chunk) = world.chunk(pos) else {
+                self.still_decay.remove(&pos);
+                continue;
+            };
+            let mut changes = Vec::new();
+            let mut remaining = false;
+            let origin = pos.origin().0;
+            for b in 0..mv_core::consts::BRICKS_PER_CHUNK {
+                if let mv_world::BrickRef::Uniform(m) = chunk.brick(b) {
+                    let p = table.get(m);
+                    if p.decay == 0 || p.drifts {
+                        continue;
+                    }
+                }
+                for local in 0..mv_core::consts::BRICK_VOLUME {
+                    let lp = mv_core::LocalPos::from_brick(b, local);
+                    let m = chunk.get(lp);
+                    let p = table.get(m);
+                    if p.decay == 0 || p.drifts || p.kind != Kind::Gas {
+                        continue;
+                    }
+                    remaining = true;
+                    let fade = table::chance(
+                        (f64::from(p.decay) / f64::from(u32::MAX) * SLOW_PERIOD as f64).min(1.0)
+                            as f32,
+                    );
+                    let wp = origin + lp.as_ivec3().as_i64vec3();
+                    if rng::hash(self.seed ^ 0x5100_0FAD, self.tick, wp) < fade {
+                        changes.push((WorldPos(wp), m, p.decays_into));
+                    }
+                }
+            }
+            if !remaining {
+                self.still_decay.remove(&pos);
+            }
+            for (wp, old, new) in changes {
+                world.set_voxel(wp, new);
+                self.voxel_changed(world, wp, old, new);
+            }
+        }
     }
 
     /// Structural integrity: cuts floating pieces out of the grid. Returns the voxels

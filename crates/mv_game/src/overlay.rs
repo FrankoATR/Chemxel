@@ -134,8 +134,8 @@ fn simulation(ui: &mut egui::Ui, d: &OverlayData<'_>, actions: &mut OverlayActio
             ui,
             "Chemistry",
             format!(
-                "{} reactions, {} decays, {} flames/tick",
-                s.reactions, s.decays, s.flames
+                "{} reactions, {} decays, {} evaporations, {} flames/tick",
+                s.reactions, s.decays, s.evaporations, s.flames
             ),
         );
         let p = d.physics;

@@ -40,9 +40,13 @@ Registro de materiales y reacciones de Chemxel.
 | `latent_heat` | número | `0` | Energía latente por vóxel respecto a la fase más baja; en combustibles, la que libera al arder (ver abajo) |
 | `heat_loss` | 0–1 | `0` | Calor perdido al entorno por vóxel, tick y grado sobre el ambiente (convección que la grilla no modela; sobre todo el aire) |
 | `emissive` | número | `0` | Intensidad de luz emitida |
-| `dispersion` | entero 0–255 | `0` | Celdas que un líquido/gas se expande en horizontal por tick |
+| `dispersion` | entero 0–255 | `0` | Líquidos: celdas que se expanden en horizontal por tick. Gases: celdas que suben por tick |
 | `lifetime` | `(min, max)` ticks | ninguno | Vida aleatoria; al expirar el vóxel se transforma en `decays_into` |
 | `decays_into` | nombre | `air` | Producto cuando expira el `lifetime` |
+| `evaporates_into` / `evaporate_rate` | nombre / 0–1 | ninguno | Líquidos: en qué se convierte un vóxel suelto de la superficie en reposo (gota, bulto sobre una capa llena, borde de un hueco en una capa incompleta) y probabilidad por tick |
+| `ceiling` / `ceiling_into` | altura (vóxeles) / nombre | ninguno | Gases: a esa altura del mundo o más se convierten en otro material (vapor → nube) |
+| `drifts` | bool | `true` | Gases: si se mueven; `false` = quieto (una nube) |
+| `spreads` | bool | `true` | Gases: si se desplazan a los lados cuando no pueden subir; `false` = el vapor atrapado bajo un techo se queda quieto |
 | `base_temperature` | °C | ninguno | Temperatura con la que se crea y a la que tiende |
 | `melt_at` / `melts_into` | °C / nombre | ninguno | Fusión (al superar la temperatura) |
 | `boil_at` / `boils_into` | °C / nombre | ninguno | Ebullición (al superar la temperatura) |

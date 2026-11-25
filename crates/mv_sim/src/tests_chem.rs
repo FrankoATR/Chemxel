@@ -361,3 +361,150 @@ fn energy_is_accounted_with_reactions_and_fire() {
         "energy drift {error:.3e} (scale {scale:.3e}, accounted {imbalance:.3e})"
     );
 }
+
+// --- Resting liquids, evaporation and clouds (ADR 012) ----------------------------
+
+/// Positions of every voxel of `name` in the box, to check that nothing moves.
+fn snapshot(f: &Fixture, name: &str, min: WorldPos, max: WorldPos) -> Vec<WorldPos> {
+    let m = f.id(name);
+    let mut out = Vec::new();
+    for z in min.0.z..=max.0.z {
+        for y in min.0.y..=max.0.y {
+            for x in min.0.x..=max.0.x {
+                if f.world.voxel(w(x, y, z)) == Some(m) {
+                    out.push(w(x, y, z));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A 12×12 stone basin (inside x, z in 0..=11, y in 1..=10).
+fn basin(f: &mut Fixture) {
+    f.place(w(-1, 1, -1), w(12, 10, 12), "stone");
+    let (lo, hi) = (w(0, 1, 0), w(11, 10, 11));
+    fill_box(&mut f.world, lo, hi, MaterialId::AIR, |_| true);
+    f.sim.wake_box(&f.world, lo, hi);
+}
+
+#[test]
+fn an_incomplete_top_layer_evaporates_and_the_pool_settles() {
+    let mut f = fixture();
+    basin(&mut f);
+    // Two full layers (288 voxels) plus 40 voxels of a third one.
+    f.place(w(0, 1, 0), w(11, 2, 11), "water");
+    f.place(w(0, 3, 0), w(4, 3, 7), "water");
+    let mut vapour = 0;
+    for _ in 0..2000 {
+        f.run(1);
+        vapour += f.sim.stats().evaporations;
+    }
+    let inside = (w(0, 1, 0), w(11, 10, 11));
+    assert_eq!(
+        f.count("water", w(0, 1, 0), w(11, 2, 11)),
+        288,
+        "full layers stay"
+    );
+    assert_eq!(
+        f.count("water", w(0, 3, 0), w(11, 10, 11)),
+        0,
+        "the incomplete layer is gone"
+    );
+    assert!(vapour >= 40, "it evaporated into vapour ({vapour})");
+    // And then the pool is still.
+    let before = snapshot(&f, "water", inside.0, inside.1);
+    f.run(60);
+    assert_eq!(
+        snapshot(&f, "water", inside.0, inside.1),
+        before,
+        "the water rests"
+    );
+}
+
+#[test]
+fn a_full_pool_keeps_its_water() {
+    let mut f = fixture();
+    basin(&mut f);
+    f.place(w(0, 1, 0), w(11, 2, 11), "water");
+    f.run(600);
+    assert_eq!(f.count("water", w(0, 1, 0), w(11, 10, 11)), 288);
+    assert_eq!(f.sim.stats().evaporations, 0);
+}
+
+const WEATHER: &str = r#"[
+    Material(name: "air",   state: Gas,    density: 1.2,  color: (0, 0, 0, 0)),
+    Material(name: "stone", state: Solid,  density: 2600, color: (1, 1, 1, 255)),
+    Material(name: "goo",   state: Liquid, density: 1000, color: (2, 2, 2, 255), dispersion: 3,
+             evaporates_into: "crust", evaporate_rate: 1),
+    Material(name: "crust", state: Solid,  density: 2000, color: (3, 3, 3, 255)),
+    Material(name: "vapor", state: Gas,    density: 0.5,  color: (4, 4, 4, 255),
+             ceiling: 30, ceiling_into: "cloud"),
+    Material(name: "cloud", state: Gas,    density: 0.4,  color: (5, 5, 5, 255), drifts: false),
+    Material(name: "mist",  state: Gas,    density: 0.5,  color: (6, 6, 6, 255),
+             lifetime: (1, 1), ceiling: 100, ceiling_into: "haze"),
+    Material(name: "haze",  state: Gas,    density: 0.4,  color: (7, 7, 7, 255), drifts: false,
+             lifetime: (600, 600)),
+]"#;
+
+#[test]
+fn a_loose_drop_turns_into_its_evaporation_product() {
+    let mut f = fixture_with(WEATHER, "[]");
+    f.place(w(10, 1, 10), w(10, 1, 10), "goo");
+    f.run(3);
+    assert_eq!(f.count("goo", ALL.0, ALL.1), 0);
+    assert_eq!(f.count("crust", ALL.0, ALL.1), 1);
+}
+
+#[test]
+fn vapour_turns_into_a_still_cloud_at_its_ceiling() {
+    let mut f = fixture_with(WEATHER, "[]");
+    f.place(w(10, 5, 10), w(12, 7, 12), "vapor");
+    f.run(80);
+    assert_eq!(f.count("vapor", ALL.0, ALL.1), 0);
+    let clouds = snapshot(&f, "cloud", ALL.0, ALL.1);
+    assert_eq!(clouds.len(), 27);
+    // The first vapour turns into cloud at the ceiling; the rest joins it from below.
+    assert!(
+        clouds.iter().all(|p| (27..=30).contains(&p.0.y)),
+        "clouds form at the ceiling height"
+    );
+    f.run(60);
+    assert_eq!(
+        snapshot(&f, "cloud", ALL.0, ALL.1),
+        clouds,
+        "clouds stay still"
+    );
+}
+
+#[test]
+fn dying_vapour_condenses_into_the_cloud_layer_above_which_fades_slowly() {
+    let mut f = fixture_with(WEATHER, "[]");
+    // Short-lived "mist" whose clouds ("haze") form at y = 100.
+    f.place(w(10, 5, 10), w(12, 5, 12), "mist");
+    f.run(3);
+    assert_eq!(f.count("mist", ALL.0, ALL.1), 0);
+    let haze = snapshot(&f, "haze", ALL.0, ALL.1);
+    assert_eq!(haze.len(), 9, "one cloud voxel per vapour voxel");
+    assert!(
+        haze.iter().all(|p| p.0.y == 100),
+        "at the ceiling height above"
+    );
+    // Clouds do not keep the simulation awake...
+    f.run(10);
+    assert_eq!(f.sim.active_chunks(), 0, "clouds are still");
+    // ...and fade in the slow pass (mean life 600 ticks).
+    f.run(3000);
+    assert!(f.count("haze", ALL.0, ALL.1) < 9, "clouds fade");
+}
+
+#[test]
+fn condensing_vapour_thickens_the_cloud_downwards() {
+    let mut f = fixture_with(WEATHER, "[]");
+    f.place(w(10, 5, 10), w(10, 5, 10), "mist");
+    f.run(2);
+    f.place(w(10, 5, 10), w(10, 5, 10), "mist");
+    f.run(2);
+    assert_eq!(f.at(w(10, 100, 10)), "haze");
+    assert_eq!(f.at(w(10, 99, 10)), "haze");
+}

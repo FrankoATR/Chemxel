@@ -33,7 +33,9 @@ montículos, el agua fluye y se nivela, los gases suben. El calor se difunde y v
 material: la lava funde el hielo, el agua hierve, el vapor sube y se condensa lejos, y la
 lava se solidifica en piedra al enfriarse (vista de calor con F5). Hay química: la lava
 que toca agua se apaga en obsidiana, el ácido disuelve la roca y el fuego se propaga por
-madera y hojas, sube en llamas, deja ceniza y humo, y se apaga con agua. Lo que queda
+madera y hojas, sube en llamas, deja ceniza y humo, y se apaga con agua. El agua se
+asienta y queda quieta: las gotas sueltas se evaporan, suben y forman nubes que se
+desvanecen; la lava suelta hace costra de basalto. Lo que queda
 suelto cae: al excavar la base de una torre, quemar un tronco o disolver un apoyo con
 ácido, la pieza se convierte en un cuerpo rígido (rapier3d) que cae, vuelca, choca y,
 al quedarse quieta, vuelve a formar parte del mundo. Solo se simulan las zonas que

@@ -70,6 +70,15 @@ pub struct Material {
     pub lifetime: Option<(u32, u32)>,
     /// Product when the lifetime expires (air if not given).
     pub decays_into: MaterialId,
+    /// What a loose surface voxel of this liquid turns into at rest, and the chance
+    /// per tick (0: never).
+    pub evaporates_into: Option<MaterialId>,
+    pub evaporate_rate: f32,
+    /// World height (voxels) at which a gas turns into another material.
+    pub ceiling: Option<Transition>,
+    /// Whether a gas moves at all, and whether it drifts sideways when it cannot rise.
+    pub drifts: bool,
+    pub spreads: bool,
     pub base_temperature: Option<f32>,
     pub melt: Option<Transition>,
     pub boil: Option<Transition>,
@@ -341,6 +350,15 @@ fn resolve(
     if d.decays_into.is_some() && d.lifetime.is_none() {
         return Err(invalid("decays_into", "needs a lifetime"));
     }
+    if !(0.0..=1.0).contains(&d.evaporate_rate) {
+        return Err(invalid("evaporate_rate", "must be within 0..=1"));
+    }
+    if d.evaporates_into.is_some() != (d.evaporate_rate > 0.0) {
+        return Err(invalid(
+            "evaporates_into",
+            "evaporates_into and a positive evaporate_rate go together",
+        ));
+    }
 
     let (r, g, b, a) = d.color;
     Ok(Material {
@@ -366,6 +384,16 @@ fn resolve(
         dispersion: d.dispersion,
         lifetime: d.lifetime,
         decays_into: reference(&d.decays_into, "decays_into")?.unwrap_or(MaterialId::AIR),
+        evaporates_into: reference(&d.evaporates_into, "evaporates_into")?,
+        evaporate_rate: d.evaporate_rate,
+        ceiling: transition(
+            d.ceiling.map(|h| h as f32),
+            &d.ceiling_into,
+            "ceiling",
+            "ceiling_into",
+        )?,
+        drifts: d.drifts,
+        spreads: d.spreads,
         base_temperature: d.base_temperature,
         melt: transition(d.melt_at, &d.melts_into, "melt_at", "melts_into")?,
         boil: transition(d.boil_at, &d.boils_into, "boil_at", "boils_into")?,

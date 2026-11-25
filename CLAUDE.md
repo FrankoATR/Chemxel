@@ -135,6 +135,14 @@ Nada de `unsafe`.
 
 **Reglas** (`automaton.rs`): todo movimiento es un intercambio ordenado por densidad
 (`Sweep::enterable`); el barrido va de abajo arriba y alterna el sentido en x y z.
+
+**Líquidos y nubes (ADR 012):**
+- **Reposo:** un líquido solo va de lado hacia una caída o con el mismo líquido
+  encima; si no, reposa (deambula con 1/8 por tick).
+- **Evaporación:** los sueltos de la superficie en reposo pasan a `evaporates_into`.
+- **Vapor:** al morir deposita `ceiling_into` en su `ceiling` (`deposit_at_ceiling`).
+- **Nubes:** `drifts: false` y con `lifetime`; se desvanecen en `slow_pass` cada
+  `SLOW_PERIOD` sin mantener vivo el chunk.
 Aleatoriedad: `rng::hash(seed, tick, pos)`, sin estado. Los cambios marcan los chunks
 como editados en `World`, y así se suben a la GPU.
 

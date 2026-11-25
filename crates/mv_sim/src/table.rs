@@ -29,6 +29,17 @@ pub struct Props {
     pub reactive: bool,
     /// Mask (`mv_world::material_bit`) of the materials it reacts with as `a`.
     pub partners: u64,
+    /// Liquids: chance per tick that a loose surface voxel at rest evaporates
+    /// (0: never), and into what.
+    pub evaporate: u32,
+    pub evaporates_into: MaterialId,
+    /// Gases: world height at which the voxel turns into `ceiling_into`
+    /// (`i64::MAX`: never).
+    pub ceiling: i64,
+    pub ceiling_into: MaterialId,
+    /// Gases: whether it moves at all, and sideways when it cannot rise.
+    pub drifts: bool,
+    pub spreads: bool,
 }
 
 /// A temperature-triggered change into another material.
@@ -184,6 +195,14 @@ impl MaterialTable {
                     .fold(0, |acc, (b, _)| {
                         acc | mv_world::material_bit(MaterialId(b as u16))
                     }),
+                evaporate: m
+                    .evaporates_into
+                    .map_or(0, |_| chance(m.evaporate_rate).max(1)),
+                evaporates_into: m.evaporates_into.unwrap_or(MaterialId::AIR),
+                ceiling: m.ceiling.map_or(i64::MAX, |c| c.at as i64),
+                ceiling_into: m.ceiling.map_or(id, |c| c.into),
+                drifts: m.drifts,
+                spreads: m.spreads,
             })
             .collect();
         let thermal = registry
@@ -254,6 +273,12 @@ impl MaterialTable {
             decays_into: id,
             reactive: false,
             partners: 0,
+            evaporate: 0,
+            evaporates_into: id,
+            ceiling: i64::MAX,
+            ceiling_into: id,
+            drifts: false,
+            spreads: false,
         })
     }
 

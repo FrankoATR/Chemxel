@@ -59,6 +59,10 @@ const FACES: [IVec3; 6] = [
 
 const SALT_REACT: u64 = 0x5EAC_7104;
 const SALT_DECAY: u64 = 0xDECA_7000;
+const SALT_EVAPORATE: u64 = 0xE7A9_0A7E;
+const SALT_WANDER: u64 = 0x3A9D_E512;
+/// Chance per tick that a resting liquid voxel with free space beside it moves.
+const WANDER: u32 = u32::MAX / 8;
 
 /// A change across a chunk border, applied after the phase if both cells still hold
 /// what the task saw: a swap (movement) or a reaction.
@@ -99,6 +103,8 @@ pub struct TaskOut {
     pub moves: u32,
     pub reactions: u32,
     pub decays: u32,
+    /// Loose liquid voxels that evaporated (or crusted over).
+    pub evaporations: u32,
     /// Energy not conserved by in-place changes (ADR 007).
     pub imbalance: f64,
     /// Chunk without a field: reaction heat to apply once it has one, per cell
@@ -108,6 +114,9 @@ pub struct TaskOut {
     pub needs_field: bool,
     /// Cells where a solid disappeared (structural integrity must check them).
     pub solid_lost: Vec<IVec3>,
+    /// Gases with a ceiling whose lifetime ended: (world x, z, material) to place at
+    /// the ceiling height above (vapour condensing into the cloud layer).
+    pub deposits: Vec<(i64, i64, MaterialId)>,
 }
 
 impl Default for Aabb {
@@ -275,10 +284,17 @@ impl Sweep<'_, '_> {
         if props.partners & self.present != 0 && self.react(p, m) {
             return;
         }
-        if props.decay != 0 {
+        // Still voxels with a lifetime (clouds) fade in the slow pass instead, so
+        // they do not keep their chunk awake.
+        if props.decay != 0 && !(props.kind == Kind::Gas && !props.drifts) {
             if self.random_salted(p, SALT_DECAY) < props.decay {
                 self.change_in_place(p, m, props.decays_into);
                 self.out.decays += 1;
+                if props.ceiling != i64::MAX {
+                    // Vapour condenses into the cloud layer above (ADR 012).
+                    let wp = self.view.origin + p.as_i64vec3();
+                    self.out.deposits.push((wp.x, wp.z, props.ceiling_into));
+                }
                 return;
             }
             self.out.live.include(p);
@@ -501,40 +517,112 @@ impl Sweep<'_, '_> {
         self.try_dirs(p, m, props, &DOWN_DIAGONALS, r, Dir::Down)
     }
 
+    /// Liquids fall, then spread sideways towards somewhere they can drop within
+    /// `dispersion`, or while more of the same liquid presses from above (a column
+    /// spreading out). Otherwise they mostly rest: they only wander one cell with a
+    /// small chance per tick, enough for wide terraces to level out. Loose surface
+    /// voxels at rest evaporate (ADR 012), which clears incomplete top layers; once
+    /// no voxel has free space beside it the chunk sleeps.
     fn liquid(&mut self, p: IVec3, m: MaterialId, props: Props) {
         if self.fall(p, m, props) {
             return;
         }
+        let above = self.view.get(p + IVec3::Y);
+        let pressed = above == Some(m);
         let r = self.random(p);
         let reach = i32::from(props.dispersion);
+        // First free spot beside the voxel without a drop behind it (for wandering).
+        let mut beside = None;
         for d in shuffled(&SIDES, r >> 3) {
             let mut target = None;
+            let mut drop = false;
             for k in 1..=reach {
                 let q = p + d * k;
                 let Some(t) = self.enterable(m, props, q, Dir::Side) else {
                     break;
                 };
+                if k == 1 && beside.is_none() {
+                    beside = Some((q, t));
+                }
                 target = Some((q, t));
                 // Stop at an edge: the voxel falls from there next tick.
                 if self.enterable(m, props, q - IVec3::Y, Dir::Down).is_some() {
+                    drop = true;
                     break;
                 }
             }
-            if let Some((q, t)) = target {
+            if let Some((q, t)) = target
+                && (drop || pressed)
+            {
                 self.swap(p, q, m, t);
                 return;
             }
         }
+        // Nowhere to drop nearby: wander one cell now and then, so wide terraces
+        // still level out, but an eighth as restless as moving every tick.
+        if let Some((q, t)) = beside {
+            if self.random_salted(p, SALT_WANDER) < WANDER {
+                self.swap(p, q, m, t);
+                return;
+            }
+            self.out.live.include(p);
+        }
+        // At rest. A loose voxel on the surface (air above) evaporates slowly.
+        if props.evaporate != 0 && above.is_some_and(MaterialId::is_air) && self.loose(p, m) {
+            if self.random_salted(p, SALT_EVAPORATE) < props.evaporate {
+                self.change_in_place(p, m, props.evaporates_into);
+                self.out.evaporations += 1;
+            } else {
+                self.out.live.include(p);
+            }
+        }
+    }
+
+    /// Whether the liquid voxel at `p` is loose: at most one neighbour of the same
+    /// liquid beside it (a drop, a bump on a full layer), or next to a hole in its
+    /// layer (air beside it with the same liquid under that air).
+    fn loose(&self, p: IVec3, m: MaterialId) -> bool {
+        let mut same = 0;
+        for d in SIDES {
+            let q = p + d;
+            match self.view.get(q) {
+                Some(n) if n == m => same += 1,
+                Some(n) if n.is_air() && self.view.get(q - IVec3::Y) == Some(m) => return true,
+                _ => {}
+            }
+        }
+        same <= 1
     }
 
     fn gas(&mut self, p: IVec3, m: MaterialId, props: Props) {
-        let above = p + IVec3::Y;
-        if let Some(t) = self.enterable(m, props, above, Dir::Up) {
-            self.swap(p, above, m, t);
+        // Vapour reaching cloud height becomes cloud, and so does vapour that rises
+        // into the underside of a cloud (clouds thicken downwards).
+        if self.view.origin.y + i64::from(p.y) >= props.ceiling
+            || (props.ceiling != i64::MAX
+                && self.view.get(p + IVec3::Y) == Some(props.ceiling_into))
+        {
+            self.change_in_place(p, m, props.ceiling_into);
+            return;
+        }
+        if !props.drifts {
+            return;
+        }
+        // Rise up to `dispersion` cells per tick (1 for most gases; vapour climbs
+        // faster so it spends less time crossing the air).
+        let mut target = None;
+        for k in 1..=i32::from(props.dispersion) {
+            let q = p + IVec3::Y * k;
+            match self.enterable(m, props, q, Dir::Up) {
+                Some(t) => target = Some((q, t)),
+                None => break,
+            }
+        }
+        if let Some((q, t)) = target {
+            self.swap(p, q, m, t);
             return;
         }
         let r = self.random(p);
-        if self.try_dirs(p, m, props, &UP_DIAGONALS, r, Dir::Up) {
+        if self.try_dirs(p, m, props, &UP_DIAGONALS, r, Dir::Up) || !props.spreads {
             return;
         }
         self.try_dirs(p, m, props, &SIDES, r >> 3, Dir::Side);
