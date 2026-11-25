@@ -134,6 +134,12 @@ impl GameWorld {
         })
     }
 
+    /// Generated ground (or sea) height at world column `(x, z)`.
+    pub fn surface_height(&self, x: i64, z: i64) -> i32 {
+        let g = self.streamer.generator();
+        g.height_at(x, z).max(g.sea_level())
+    }
+
     /// A camera position a few metres above the terrain at world column `(x, z)`.
     pub fn spawn_point(&self, x: i64, z: i64) -> DVec3 {
         let g = self.streamer.generator();

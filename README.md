@@ -47,8 +47,12 @@ lo que tienen cerca, agua, vapor y vidrio translúcidos, y niebla (F6 alterna la
 Las normales se suavizan con la pendiente cercana y el ruido de color es suave, para que
 los escalones de vóxeles no se lean como cubos grandes (`render.smooth_normals` y
 `color_noise` en `assets/config.ron`).
-Se camina con colisión (saltar, subir escalones, nadar) o se vuela (F), y el mundo se
-guarda solo: al salir y volver a entrar todo sigue como estaba.
+El mundo generado tiene prados con hierba alta y manchas de flores, acantilados con
+vetas de roca, rocas sueltas y bosques de árboles verdes, de otoño y dorados.
+Se camina con colisión (saltar, subir escalones, nadar; la hierba alta se atraviesa) o se
+vuela (F), y el mundo se guarda solo: al salir y volver a entrar todo sigue como estaba.
+Las partidas creadas antes de este paisaje conservan su terreno; para verlo, crea un mundo
+nuevo con `--world=NOMBRE`.
 
 Referencia (RTX 5060 Laptop, 1080p, sin vsync): ~240 FPS volando a 20 m/s sobre el
 terreno con toda la iluminación (~470 sin ella). El detalle y las métricas de cada hito están en
@@ -109,6 +113,7 @@ Partidas: `saves/<mundo>/` en la carpeta del proyecto (o `CHEMXEL_SAVES_DIR`), t
 ```bash
 cargo run --release -- --world=isla      # otra partida (por defecto: default)
 cargo run --release -- --no-save         # no guardar nada esta vez
+cargo run --release -- --spawn=-260,-1800 # empezar sobre esa columna (en microvóxeles)
 ```
 
 Los benchmarks no guardan, salvo que se indique `--world=`.
@@ -124,8 +129,9 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 - **Render:** vsync, distancia horizontal y vertical, memoria del brick pool, slots de
   chunk, presupuesto de subida por frame, campo de visión, dirección del sol, distancia
   de sombras e intensidad de la oclusión ambiental.
-- **Mundo:** semilla, nivel del mar, forma del terreno, margen de descarga, trabajos de
-  generación en paralelo.
+- **Mundo:** semilla, nivel del mar, forma del terreno (colinas, rugosidad,
+  acantilados, roca), densidad de hierba, flores, árboles y rocas, margen de descarga,
+  trabajos de generación en paralelo.
 - **Controles:** velocidad de la cámara, sensibilidad del ratón.
 - **Pincel:** radio inicial y máximo, alcance, repeticiones por segundo.
 - **Jugador:** velocidad al caminar, salto, gravedad, altura de escalón, tamaño, empezar

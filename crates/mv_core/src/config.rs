@@ -203,7 +203,7 @@ impl Default for RenderConfig {
             vsync: true,
             render_distance_chunks: 16,
             render_height_chunks: 8,
-            brick_pool_capacity: 262_144,
+            brick_pool_capacity: 393_216,
             chunk_slot_capacity: 8192,
             upload_budget_kib: 8192,
             heat_view_capacity: 1024,
@@ -250,10 +250,16 @@ impl Default for WorldConfig {
     }
 }
 
-/// Heightmap terrain: `base + hills + detail + mountains`, each from fBm noise.
+/// Heightmap terrain: `base + hills + detail + mountains (+ roughness + cliffs)`,
+/// each from fBm noise, with vegetation, trees and boulders on top (generator 2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TerrainConfig {
+    /// Generator version. 1: the plain heightmap of milestone 2 (saves that do not
+    /// name a version keep it, so their saved chunks match the terrain around them);
+    /// 2: natural landscape (ADR 013).
+    #[serde(default = "legacy_generator")]
+    pub generator: u32,
     pub base_height: f64,
     /// Large rolling hills.
     pub hills_amplitude: f64,
@@ -271,6 +277,28 @@ pub struct TerrainConfig {
     pub grass_depth: i32,
     /// Columns whose surface is at most this far above sea level become sand.
     pub beach_height: i32,
+    /// Generator 2. Fine bumps that break the long contour lines of gentle slopes.
+    pub roughness_amplitude: f64,
+    pub roughness_wavelength: f64,
+    /// Generator 2. Stepped cliffs (total height of the steps), in some regions.
+    pub cliff_amplitude: f64,
+    pub cliff_wavelength: f64,
+    /// Generator 2. Columns this much higher or lower than a neighbour show bare
+    /// rock (with strata) instead of grass.
+    pub rock_slope: i32,
+    /// Generator 2. Share of meadow columns with a tuft of tall grass (0..1).
+    pub grass_density: f64,
+    /// Generator 2. Share of tufts that carry a flower, inside flower patches (0..1).
+    pub flower_chance: f64,
+    /// Generator 2. Chance of a tree per `tree_spacing`² cell inside forests (0..1).
+    pub tree_density: f64,
+    pub tree_spacing: i32,
+    /// Generator 2. Chance of a boulder per 96² cell (0..1).
+    pub boulder_density: f64,
+}
+
+fn legacy_generator() -> u32 {
+    1
 }
 
 impl Default for TerrainConfig {
@@ -287,6 +315,17 @@ impl Default for TerrainConfig {
             dirt_depth: 24,
             grass_depth: 2,
             beach_height: 6,
+            generator: 2,
+            roughness_amplitude: 2.5,
+            roughness_wavelength: 18.0,
+            cliff_amplitude: 96.0,
+            cliff_wavelength: 700.0,
+            rock_slope: 4,
+            grass_density: 0.3,
+            flower_chance: 0.25,
+            tree_density: 0.6,
+            tree_spacing: 112,
+            boulder_density: 0.2,
         }
     }
 }
@@ -553,6 +592,14 @@ mod tests {
             SimConfig::default().max_ticks_per_frame
         );
         assert_eq!(c.window, WindowConfig::default());
+    }
+
+    #[test]
+    fn terrain_without_generator_is_the_legacy_one() {
+        // Saves from before generator 2 list their terrain without `generator`.
+        let c = Config::from_ron("(world: (terrain: (base_height: 24.0)))", "test").unwrap();
+        assert_eq!(c.world.terrain.generator, 1);
+        assert_eq!(Config::default().world.terrain.generator, 2);
     }
 
     #[test]

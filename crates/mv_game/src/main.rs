@@ -142,6 +142,19 @@ fn run() -> anyhow::Result<()> {
     };
     let mut app = app::App::new(config, materials, world, bench, bench_drop, save);
     app.set_lighting_preset(lighting_preset);
+    // `--spawn=X,Z` starts above that world column (microvoxels), e.g. to look at a
+    // place of a new world.
+    if let Some(spawn) =
+        std::env::args().find_map(|a| a.strip_prefix("--spawn=").map(str::to_owned))
+    {
+        match spawn
+            .split_once(',')
+            .map(|(x, z)| (x.trim().parse(), z.trim().parse()))
+        {
+            Some((Ok(x), Ok(z))) => app.spawn_at(x, z),
+            _ => tracing::warn!("--spawn={spawn}: expected X,Z in microvoxels"),
+        }
+    }
     // `--ui=wheel|inventory` opens that screen at start (for screenshots and tests).
     if let Some(ui) = std::env::args().find_map(|a| a.strip_prefix("--ui=").map(str::to_owned)) {
         app.preview_ui(&ui);

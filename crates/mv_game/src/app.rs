@@ -301,6 +301,12 @@ impl App {
         }
     }
 
+    /// Moves the camera and the player a few metres above world column `(x, z)`.
+    pub fn spawn_at(&mut self, x: i64, z: i64) {
+        self.camera.position = self.world.spawn_point(x, z);
+        self.player.set_eye_position(self.camera.position);
+    }
+
     /// Opens a UI screen at start: `wheel` (pointing at slot 3) or `inventory`.
     pub fn preview_ui(&mut self, which: &str) {
         match which {
@@ -481,7 +487,9 @@ impl App {
 
         if let Some(bench) = self.bench.as_mut() {
             let ready = self.world.is_idle();
-            if bench.step(&mut self.camera, dt, ready, &self.stats.sync) {
+            let world = &self.world;
+            let ground = |x: i64, z: i64| world.surface_height(x, z);
+            if bench.step(&mut self.camera, dt, ready, &self.stats.sync, &ground) {
                 let w = self.world.world.stats();
                 let g = &self.stats.gpu;
                 tracing::info!(

@@ -65,6 +65,10 @@ pub(crate) struct Material {
     /// under a roof stays put instead of wandering).
     #[serde(default = "default_true")]
     pub spreads: bool,
+    /// Solids the player walks through (tall grass, flowers). The simulation still
+    /// treats them as static solids.
+    #[serde(default)]
+    pub passable: bool,
     /// Temperature the material is created at and tends to (°C).
     #[serde(default)]
     pub base_temperature: Option<f32>,

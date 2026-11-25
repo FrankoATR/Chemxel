@@ -46,6 +46,7 @@ Registro de materiales y reacciones de Chemxel.
 | `evaporates_into` / `evaporate_rate` | nombre / 0–1 | ninguno | Líquidos: en qué se convierte un vóxel suelto de la superficie en reposo (gota, bulto sobre una capa llena, borde de un hueco en una capa incompleta) y probabilidad por tick |
 | `ceiling` / `ceiling_into` | altura (vóxeles) / nombre | ninguno | Gases: a esa altura del mundo o más se convierten en otro material (vapor → nube) |
 | `drifts` | bool | `true` | Gases: si se mueven; `false` = quieto (una nube) |
+| `passable` | bool | `false` | Sólidos que el jugador atraviesa (hierba alta, flores); para la simulación siguen siendo sólidos estáticos |
 | `spreads` | bool | `true` | Gases: si se desplazan a los lados cuando no pueden subir; `false` = el vapor atrapado bajo un techo se queda quieto |
 | `base_temperature` | °C | ninguno | Temperatura con la que se crea y a la que tiende |
 | `transition_rate` | 0–1 | `sim.transition_rate` (0,1) | Probabilidad por tick de sus cambios de fase (fundirse, hervir, solidificarse) una vez pasado el umbral; más bajo = más lento |

@@ -13,13 +13,7 @@ use mv_world::terrain::{TerrainGenerator, TerrainPalette};
 use mv_world::{Chunk, MaterialId, World};
 
 fn generator() -> TerrainGenerator {
-    let palette = TerrainPalette {
-        stone: MaterialId(1),
-        dirt: MaterialId(2),
-        grass: MaterialId(3),
-        sand: MaterialId(4),
-        water: MaterialId(5),
-    };
+    let palette = TerrainPalette::synthetic();
     TerrainGenerator::new(&WorldConfig::default(), 12_648_430, palette)
 }
 

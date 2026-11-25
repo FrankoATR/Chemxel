@@ -30,6 +30,7 @@ cargo run --release -- --bench-tower[=SECS] # torre con la base excavada (rígid
 cargo run --release -- --bench-fly --lighting=off  # (o shadows/full) coste de la iluminación
 cargo run --release -- --world=NOMBRE       # partida en saves/NOMBRE (--no-save: no guardar)
 cargo run --release -- --no-save --ui=inventory   # (o wheel) abre esa pantalla al arrancar
+cargo run --release -- --no-save --spawn=-260,-1800  # empezar sobre esa columna (microvóxeles)
 ```
 
 Los benchmarks no guardan salvo con `--world=`; para pruebas, `CHEMXEL_SAVES_DIR` apunta a
@@ -94,9 +95,15 @@ descarta el atraso (evita la espiral de muerte).
 - **`World`:** `HashMap<ChunkPos, Chunk>` más colas `loaded` (streaming), `edited` y
   `unloaded`. Quien consume (la subida a GPU) las vacía cada frame.
   - Para escribir vóxeles: `World::set_voxel`, o `chunk_mut` + `mark_edited`.
-- **`terrain::TerrainGenerator`:** determinista por seed. Alturas por columna en caché y
-  clasificación rápida de chunks/bricks uniformes. Un test compara contra la evaluación
-  vóxel a vóxel.
+- **`terrain::TerrainGenerator`** (ADR 013): determinista por seed.
+  - Mapa de alturas con rugosidad y acantilados. Cada `Column` lleva su superficie
+    (hierba, arena, roca con estratos) y su vegetación (mata y flor).
+  - Árboles y rocas son `Feature`s (cápsulas y bolas con ruido), una por celda de una
+    cuadrícula, por hash.
+  - Columnas en caché y clasificación rápida de chunks/bricks uniformes. Un test compara
+    contra la evaluación vóxel a vóxel.
+  - `terrain.generator` 1 es el terreno anterior; lo usan las partidas que no guardan
+    versión.
 - **`stream::Streamer`:** cilindro alrededor de la cámara, generación en rayon, resultados
   insertados en el hilo principal. Los chunks modificados que se descargan van a un stash.
 - **`raycast`:** DDA en `f64`. **`edit::fill_sphere`:** edita chunk a chunk.

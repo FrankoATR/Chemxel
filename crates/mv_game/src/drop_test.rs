@@ -11,6 +11,10 @@
 //!
 //! Boxes of material "air" are removals (they overwrite anything); the caller
 //! reports them to the simulation as such, which triggers structural integrity.
+//!
+//! Every scenario first clears the vegetation (passable materials: tall grass,
+//! flowers) around it, so it stands on bare ground and the benchmarks measure the
+//! same work as before the natural landscape (ADR 013).
 
 use mv_core::WorldPos;
 use mv_materials::{MaterialId, MaterialRegistry};
@@ -42,6 +46,15 @@ pub fn spawn(
 ) -> Vec<Placed> {
     let g = ground.0;
     let p = |x, y, z| WorldPos::new(g.x + x, g.y + y, g.z + z);
+    // Static vegetation: nothing in the simulation depends on it, so the clearing is
+    // not reported (only uploaded).
+    let cleared = fill_box(
+        world,
+        p(-CLEARING, -64, -CLEARING),
+        p(CLEARING, 64, CLEARING),
+        MaterialId::AIR,
+        |m| registry.get(m).passable,
+    );
     let boxes: Vec<(&str, WorldPos, WorldPos)> = match scenario {
         Scenario::SandAndWater => vec![
             ("sand", p(-45, 40, -20), p(-6, 71, 19)),
@@ -68,9 +81,14 @@ pub fn spawn(
         };
         placed.push(Placed { min, max, material });
     }
-    tracing::info!("scenario {scenario:?}: placed {voxels} voxels");
+    tracing::info!(
+        "scenario {scenario:?}: placed {voxels} voxels ({cleared} of vegetation cleared)"
+    );
     placed
 }
+
+/// Half side of the area cleared of vegetation around every scenario.
+const CLEARING: i64 = 56;
 
 /// Trees per side of the forest grid.
 const FOREST_SIDE: i64 = 6;

@@ -28,8 +28,9 @@
         vsync: true,
         render_distance_chunks: 16,  // horizontal radius (1 chunk = 4 m)
         render_height_chunks: 8,     // vertical radius around the camera (covers mountains)
-        // 8³ bricks, 1 KiB each: 262144 = 256 MiB of GPU memory.
-        brick_pool_capacity: 262144,
+        // 8³ bricks, 1 KiB each: 393216 = 384 MiB of GPU memory (vegetation and trees
+        // need about 200 MiB at render distance 16).
+        brick_pool_capacity: 393216,
         chunk_slot_capacity: 8192,   // 2 KiB each
         upload_budget_kib: 8192,     // streamed data per frame; edits are never delayed
         heat_view_capacity: 1024,    // temperature fields shown by F5 (16 KiB each)
@@ -47,6 +48,9 @@
     world: (
         sea_level: 0,
         terrain: (
+            // Generator 2: natural landscape (ADR 013). Saves keep the generator and
+            // settings they were created with.
+            generator: 2,
             base_height: 24.0,
             hills_amplitude: 96.0,
             hills_wavelength: 1400.0,
@@ -58,6 +62,16 @@
             dirt_depth: 24,
             grass_depth: 2,
             beach_height: 6,
+            roughness_amplitude: 2.5,   // fine bumps that break long contour lines
+            roughness_wavelength: 18.0,
+            cliff_amplitude: 96.0,      // stepped rock cliffs in some regions
+            cliff_wavelength: 700.0,
+            rock_slope: 4,              // steeper columns show bare rock with strata
+            grass_density: 0.3,        // tufts of tall grass on meadows (0..1)
+            flower_chance: 0.25,        // tufts with a flower inside flower patches
+            tree_density: 0.6,          // per tree_spacing² cell inside forests
+            tree_spacing: 112,
+            boulder_density: 0.2,
         ),
         unload_margin_chunks: 2,
         max_inflight_jobs: 64,

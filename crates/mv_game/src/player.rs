@@ -59,7 +59,9 @@ impl Player {
             step: (f64::from(controls.step_height) * M).floor(),
             solid: registry
                 .iter()
-                .map(|(_, m)| matches!(m.state, MatterState::Solid | MatterState::Powder))
+                .map(|(_, m)| {
+                    matches!(m.state, MatterState::Solid | MatterState::Powder) && !m.passable
+                })
                 .collect(),
             liquid: registry
                 .iter()

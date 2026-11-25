@@ -80,4 +80,32 @@
     // Crust of loose lava that cooled at the surface.
     Material(name: "basalt",   category: "Terrain", state: Solid, density: 2900, color: (58, 54, 58, 255),   conductivity: 2.0,
              heat_capacity: 0.85, melt_at: 1200, melts_into: "lava"),
+
+    // --- Landscape (appended: existing ids must not change) ---
+    // Vegetation the terrain generator scatters on meadows: the player walks through
+    // it (`passable`), and it burns like grass.
+    Material(name: "tall_grass",    category: "Nature", state: Solid, density: 300, color: (96, 152, 60, 255),  conductivity: 0.1,
+             latent_heat: 80000, passable: true,
+             flammable: true, ignite_at: 220, burns_into: "air", burn_rate: 0.08),
+    Material(name: "flower_red",    category: "Nature", state: Solid, density: 300, color: (212, 46, 64, 255),  conductivity: 0.1,
+             latent_heat: 80000, passable: true,
+             flammable: true, ignite_at: 220, burns_into: "air", burn_rate: 0.08),
+    Material(name: "flower_yellow", category: "Nature", state: Solid, density: 300, color: (244, 204, 56, 255), conductivity: 0.1,
+             latent_heat: 80000, passable: true,
+             flammable: true, ignite_at: 220, burns_into: "air", burn_rate: 0.08),
+    Material(name: "flower_violet", category: "Nature", state: Solid, density: 300, color: (168, 112, 226, 255), conductivity: 0.1,
+             latent_heat: 80000, passable: true,
+             flammable: true, ignite_at: 220, burns_into: "air", burn_rate: 0.08),
+    // Autumn foliage of the generated trees.
+    Material(name: "leaves_autumn", category: "Nature", state: Solid, density: 400, color: (214, 84, 30, 255),  conductivity: 0.1,
+             heat_capacity: 1.5, latent_heat: 400000,
+             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06,
+             flame: "fire", flame_rate: 0.25),
+    Material(name: "leaves_gold",   category: "Nature", state: Solid, density: 400, color: (226, 168, 40, 255), conductivity: 0.1,
+             heat_capacity: 1.5, latent_heat: 400000,
+             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06,
+             flame: "fire", flame_rate: 0.25),
+    // Brown rock of the strata on cliffs.
+    Material(name: "sandstone",     category: "Terrain", state: Solid, density: 2300, color: (172, 118, 78, 255), conductivity: 1.7,
+             heat_capacity: 0.8, melt_at: 1300, melts_into: "lava"),
 ]

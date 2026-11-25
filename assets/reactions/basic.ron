@@ -12,6 +12,12 @@
     Reaction(a: "fire",  b: "wood",   probability: 0.3, heat: 300000),
     Reaction(a: "fire",  b: "leaves", probability: 0.4, heat: 500000),
     Reaction(a: "fire",  b: "grass",  probability: 0.1, heat: 100000),
+    Reaction(a: "fire",  b: "leaves_autumn", probability: 0.4, heat: 500000),
+    Reaction(a: "fire",  b: "leaves_gold",   probability: 0.4, heat: 500000),
+    Reaction(a: "fire",  b: "tall_grass",    probability: 0.3, heat: 100000),
+    Reaction(a: "fire",  b: "flower_red",    probability: 0.3, heat: 100000),
+    Reaction(a: "fire",  b: "flower_yellow", probability: 0.3, heat: 100000),
+    Reaction(a: "fire",  b: "flower_violet", probability: 0.3, heat: 100000),
     // Water and ice put flames out.
     Reaction(a: "fire",  b: "water",  result_a: "smoke", probability: 0.5),
     Reaction(a: "fire",  b: "ice",    result_a: "smoke", probability: 0.5),
@@ -23,6 +29,10 @@
     Reaction(a: "acid",  b: "sand",   result_a: "air", result_b: "air", probability: 0.03),
     Reaction(a: "acid",  b: "wood",   result_a: "air", result_b: "air", probability: 0.05),
     Reaction(a: "acid",  b: "leaves", result_a: "air", result_b: "air", probability: 0.1),
+    Reaction(a: "acid",  b: "leaves_autumn", result_a: "air", result_b: "air", probability: 0.1),
+    Reaction(a: "acid",  b: "leaves_gold",   result_a: "air", result_b: "air", probability: 0.1),
+    Reaction(a: "acid",  b: "tall_grass",    result_a: "air", result_b: "air", probability: 0.1),
+    Reaction(a: "acid",  b: "sandstone",     result_a: "air", result_b: "air", probability: 0.03),
     Reaction(a: "acid",  b: "ash",    result_a: "air", result_b: "air", probability: 0.1),
     Reaction(a: "acid",  b: "ice",    result_b: "water", probability: 0.05),
     // Water slowly dilutes acid.

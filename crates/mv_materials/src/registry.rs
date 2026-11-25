@@ -79,6 +79,8 @@ pub struct Material {
     /// Whether a gas moves at all, and whether it drifts sideways when it cannot rise.
     pub drifts: bool,
     pub spreads: bool,
+    /// Solids the player walks through (vegetation).
+    pub passable: bool,
     pub base_temperature: Option<f32>,
     /// Chance per tick of its phase changes (overrides the simulation default).
     pub transition_rate: Option<f32>,
@@ -399,6 +401,7 @@ fn resolve(
         )?,
         drifts: d.drifts,
         spreads: d.spreads,
+        passable: d.passable,
         base_temperature: d.base_temperature,
         transition_rate: d.transition_rate,
         melt: transition(d.melt_at, &d.melts_into, "melt_at", "melts_into")?,

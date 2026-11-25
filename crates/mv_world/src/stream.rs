@@ -249,13 +249,7 @@ mod tests {
     use mv_materials::MaterialId;
 
     fn streamer(radius: u32) -> Streamer {
-        let palette = TerrainPalette {
-            stone: MaterialId(1),
-            dirt: MaterialId(2),
-            grass: MaterialId(3),
-            sand: MaterialId(4),
-            water: MaterialId(5),
-        };
+        let palette = TerrainPalette::synthetic();
         let generator = Arc::new(TerrainGenerator::new(&WorldConfig::default(), 1, palette));
         Streamer::new(
             generator,
@@ -306,7 +300,7 @@ mod tests {
         let origin = ChunkPos::new(0, 0, 0);
         run_until_idle(&mut s, origin, &mut world);
         let p = WorldPos::from_chunk_local(origin, LocalPos::new(1, 2, 3));
-        let marker = MaterialId(9);
+        let marker = MaterialId(200);
         assert!(world.set_voxel(p, marker));
 
         run_until_idle(&mut s, ChunkPos::new(20, 0, 0), &mut world);
@@ -333,11 +327,22 @@ mod tests {
                 Material(name: "grass",  state: Solid,  density: 1300, color: (3, 3, 3, 255)),
                 Material(name: "sand",   state: Powder, density: 1600, color: (4, 4, 4, 255)),
                 Material(name: "water",  state: Liquid, density: 1000, color: (5, 5, 5, 255)),
-                Material(name: "marker", state: Solid,  density: 1000, color: (6, 6, 6, 255)),
+                Material(name: "sandstone", state: Solid, density: 1, color: (6, 6, 6, 255)),
+                Material(name: "basalt", state: Solid, density: 1, color: (7, 7, 7, 255)),
+                Material(name: "tall_grass", state: Solid, density: 1, color: (8, 8, 8, 255)),
+                Material(name: "flower_red", state: Solid, density: 1, color: (9, 9, 9, 255)),
+                Material(name: "flower_yellow", state: Solid, density: 1, color: (10, 10, 10, 255)),
+                Material(name: "flower_violet", state: Solid, density: 1, color: (11, 11, 11, 255)),
+                Material(name: "wood", state: Solid, density: 1, color: (12, 12, 12, 255)),
+                Material(name: "leaves", state: Solid, density: 1, color: (13, 13, 13, 255)),
+                Material(name: "leaves_autumn", state: Solid, density: 1, color: (14, 14, 14, 255)),
+                Material(name: "leaves_gold", state: Solid, density: 1, color: (15, 15, 15, 255)),
+                Material(name: "marker", state: Solid,  density: 1000, color: (16, 16, 16, 255)),
             ]"#,
         )])
         .unwrap();
-        let marker = MaterialId(6);
+        // Ids 1..=15 are the synthetic terrain palette; the marker comes after.
+        let marker = MaterialId(16);
         let origin = ChunkPos::new(0, 0, 0);
         let p = WorldPos::from_chunk_local(origin, LocalPos::new(1, 2, 3));
         let q = WorldPos::from_chunk_local(ChunkPos::new(1, 0, 0), LocalPos::new(5, 5, 5));

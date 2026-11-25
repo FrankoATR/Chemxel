@@ -1,8 +1,8 @@
 //! `--bench-fly`: reproducible streaming benchmark in the real game.
 //!
 //! Waits until the region around the spawn point is fully loaded, then flies the
-//! camera in a straight line at constant speed and altitude (10 m above the spawn) while recording every
-//! frame time. At the end it logs percentiles and stutter counts and asks the app
+//! camera in a straight line at constant speed and altitude (10 m above the spawn, or
+//! above the highest ground along the route) while recording every frame time. At the end it logs percentiles and stutter counts and asks the app
 //! to exit. Use with `vsync: false` to measure the real frame cost.
 
 use std::time::Duration;
@@ -46,13 +46,23 @@ impl BenchFly {
         dt: Duration,
         world_ready: bool,
         sync: &SyncStats,
+        ground: &dyn Fn(i64, i64) -> i32,
     ) -> bool {
         let Some(elapsed) = self.flying.as_mut() else {
             if world_ready {
                 tracing::info!("bench-fly: world loaded, flying for {:?}", self.duration);
                 self.flying = Some(Duration::ZERO);
-                // 10 m above the spawn point, looking ahead and slightly down.
-                self.start = camera.position + DVec3::Y * 160.0;
+                // 10 m above the spawn point (or above the highest ground of the
+                // route, so it never flies through a hill), looking ahead and
+                // slightly down.
+                let length = self.speed * self.duration.as_secs_f64();
+                let (x0, z) = (camera.position.x as i64, camera.position.z as i64);
+                let top = (0..=(length as i64 / 32))
+                    .map(|i| ground(x0 + i * 32, z))
+                    .max()
+                    .unwrap_or(i32::MIN);
+                self.start = camera.position;
+                self.start.y = (camera.position.y + 160.0).max(f64::from(top) + 160.0);
                 camera.yaw = -std::f32::consts::FRAC_PI_2; // look along +X
                 camera.pitch = -0.25;
             }
