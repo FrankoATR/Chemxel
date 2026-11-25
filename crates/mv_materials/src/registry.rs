@@ -90,6 +90,8 @@ pub struct Material {
     pub flammable: bool,
     pub ignite: Option<Transition>,
     pub burn_rate: f32,
+    /// Share of consumed voxels that leave the burn product (the rest: air).
+    pub burn_residue: f32,
     /// Emitted into adjacent air while burning.
     pub flame: Option<MaterialId>,
     pub flame_rate: f32,
@@ -340,6 +342,9 @@ fn resolve(
     if !(0.0..=1.0).contains(&d.burn_rate) {
         return Err(invalid("burn_rate", "must be within 0..=1"));
     }
+    if !(0.0..=1.0).contains(&d.burn_residue) {
+        return Err(invalid("burn_residue", "must be within 0..=1"));
+    }
     if !(0.0..=1.0).contains(&d.heat_loss) {
         return Err(invalid("heat_loss", "must be within 0..=1"));
     }
@@ -410,6 +415,7 @@ fn resolve(
         flammable: d.flammable,
         ignite: transition(d.ignite_at, &d.burns_into, "ignite_at", "burns_into")?,
         burn_rate: d.burn_rate,
+        burn_residue: d.burn_residue,
         flame: reference(&d.flame, "flame")?,
         flame_rate: d.flame_rate,
     })

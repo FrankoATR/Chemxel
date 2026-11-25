@@ -271,8 +271,14 @@ fn hot_wood_burns_into_ash_and_emits_flames() {
         flames += f.sim.stats().flames;
     }
     assert!(flames > 0, "burning wood emits flames");
-    assert!(f.count("ash", ALL.0, ALL.1) > 0, "wood burns into ash");
-    assert!(f.count("wood", w(0, 1, 0), w(7, 8, 7)) < 512);
+    let ash = f.count("ash", ALL.0, ALL.1);
+    let burnt = 512 - f.count("wood", w(0, 1, 0), w(7, 8, 7));
+    assert!(ash > 0, "wood burns into ash");
+    // `burn_residue`: most of the wood burns away, only a little ash is left.
+    assert!(
+        burnt > 100 && ash * 4 < burnt,
+        "{ash} ash from {burnt} burnt wood"
+    );
 }
 
 /// Builds a tree: a 2×2 trunk of `height` and a leaf canopy around its top.

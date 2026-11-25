@@ -99,6 +99,10 @@ pub(crate) struct Material {
     /// Probability per tick that a burning voxel is consumed.
     #[serde(default)]
     pub burn_rate: f32,
+    /// Share of consumed voxels that leave `burns_into`; the rest turn into air
+    /// (burnt wood leaves a little ash, not a block of it).
+    #[serde(default = "default_one")]
+    pub burn_residue: f32,
     /// Material a burning voxel emits into an adjacent air voxel (e.g. "fire"). Its
     /// `base_temperature` also caps the temperature combustion can reach.
     #[serde(default)]
@@ -114,4 +118,8 @@ fn default_heat_capacity() -> f32 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_one() -> f32 {
+    1.0
 }

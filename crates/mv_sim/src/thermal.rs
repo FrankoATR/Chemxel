@@ -34,6 +34,7 @@ const _: () = assert!(CELL == 4);
 /// Salts that decorrelate the random rolls of the thermal pass.
 const SALT_PHASE: u64 = 0x7E3A_11C5;
 const SALT_BURN: u64 = 0xB0B1_F12E;
+const SALT_RESIDUE: u64 = 0xA5_4E5D;
 const SALT_FLAME: u64 = 0x0F1A_3E55;
 
 /// Cell index of chunk-local voxel `p` (x fastest, like every other index).
@@ -415,11 +416,19 @@ pub fn transitions(
                 continue;
             };
             if rng::hash(params.seed ^ SALT_BURN, params.tick, world) < burn.rate {
-                if table.get(m).kind == Kind::Static && table.get(burn.into).kind != Kind::Static {
+                // Only a share leaves the product (ash); the rest burns away.
+                let into = if burn.residue == u32::MAX
+                    || rng::hash(params.seed ^ SALT_RESIDUE, params.tick, world) < burn.residue
+                {
+                    burn.into
+                } else {
+                    MaterialId::AIR
+                };
+                if table.get(m).kind == Kind::Static && table.get(into).kind != Kind::Static {
                     out.solid_lost.push(pi);
                 }
-                out.imbalance += field.change_voxel(c, p, table.thermal(burn.into), burn.max_temp);
-                chunk.set(lp, burn.into);
+                out.imbalance += field.change_voxel(c, p, table.thermal(into), burn.max_temp);
+                chunk.set(lp, into);
                 out.changed.include(pi);
                 out.count += 1;
                 continue;

@@ -57,6 +57,8 @@ pub struct Burn {
     pub into: MaterialId,
     /// Chance per tick of being consumed while burning.
     pub rate: u32,
+    /// Chance that a consumed voxel leaves `into` (otherwise air).
+    pub residue: u32,
     /// Emitted into adjacent air while burning.
     pub flame: Option<MaterialId>,
     pub flame_rate: u32,
@@ -229,6 +231,7 @@ impl MaterialTable {
                     at: t.at,
                     into: t.into,
                     rate: chance(m.burn_rate),
+                    residue: chance(m.burn_residue),
                     flame: m.flame,
                     flame_rate: chance(m.flame_rate),
                     max_temp: m

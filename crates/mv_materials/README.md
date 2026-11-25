@@ -56,11 +56,13 @@ Registro de materiales y reacciones de Chemxel.
 | `flammable` | bool | `false` | Puede arder |
 | `ignite_at` / `burns_into` | °C / nombre | ninguno | Ignición y producto de la combustión |
 | `burn_rate` | 0–1 | `0` | Probabilidad por tick de consumirse mientras arde |
+| `burn_residue` | 0–1 | `1` | Parte de los vóxeles consumidos que deja `burns_into`; el resto pasa a aire (la madera deja poca ceniza) |
 | `flame` | nombre | ninguno | Material que emite al aire vecino mientras arde (p. ej. `fire`); su `base_temperature` limita la temperatura de la combustión |
 | `flame_rate` | 0–1 | `0` | Probabilidad por tick de emitir una llama mientras arde |
 
 Un vóxel inflamable **arde** mientras su celda de temperatura supera `ignite_at`. Cada
-tick, con probabilidad `burn_rate`, se convierte en `burns_into` y libera
+tick, con probabilidad `burn_rate`, se consume: queda `burns_into` con probabilidad
+`burn_residue` (si no, aire) y libera
 `latent_heat(material) − latent_heat(producto)`, hasta la temperatura de su llama. Si no
 se consume, con probabilidad `flame_rate` emite una llama en un vóxel de aire vecino.
 

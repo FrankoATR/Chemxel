@@ -48,13 +48,14 @@
     // --- Combustion ---
     // A flammable voxel burns while its cell is above `ignite_at`: each tick it may be
     // consumed (`burn_rate`, releasing `latent_heat`) or emit a `flame` into the air.
+    // Only `burn_residue` of the consumed voxels leave ash: most of it burns away.
     Material(name: "wood",     category: "Nature", state: Solid,  density: 700,  color: (130, 85, 45, 255),   conductivity: 0.15,
              heat_capacity: 1.7, latent_heat: 1000000,
-             flammable: true, ignite_at: 280, burns_into: "ash", burn_rate: 0.02,
+             flammable: true, ignite_at: 280, burns_into: "ash", burn_rate: 0.02, burn_residue: 0.12,
              flame: "fire", flame_rate: 0.12),
     Material(name: "leaves",   category: "Nature", state: Solid,  density: 400,  color: (60, 125, 45, 255),   conductivity: 0.1,
              heat_capacity: 1.5, latent_heat: 400000,
-             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06,
+             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06, burn_residue: 0.04,
              flame: "fire", flame_rate: 0.25),
     Material(name: "fire",     category: "Energy", state: Energy, density: 0.3,  color: (255, 160, 40, 230),  conductivity: 0.05,
              emissive: 6.0, base_temperature: 800, lifetime: (10, 30), decays_into: "smoke"),
@@ -99,11 +100,11 @@
     // Autumn foliage of the generated trees.
     Material(name: "leaves_autumn", category: "Nature", state: Solid, density: 400, color: (214, 84, 30, 255),  conductivity: 0.1,
              heat_capacity: 1.5, latent_heat: 400000,
-             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06,
+             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06, burn_residue: 0.04,
              flame: "fire", flame_rate: 0.25),
     Material(name: "leaves_gold",   category: "Nature", state: Solid, density: 400, color: (226, 168, 40, 255), conductivity: 0.1,
              heat_capacity: 1.5, latent_heat: 400000,
-             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06,
+             flammable: true, ignite_at: 220, burns_into: "ash", burn_rate: 0.06, burn_residue: 0.04,
              flame: "fire", flame_rate: 0.25),
     // Brown rock of the strata on cliffs.
     Material(name: "sandstone",     category: "Terrain", state: Solid, density: 2300, color: (172, 118, 78, 255), conductivity: 1.7,
