@@ -106,10 +106,16 @@ fn no_hit() -> Hit {
     return Hit(false, 0.0, 0u, 0, vec3<i32>(0));
 }
 
-fn voxel_material(brick: u32, v: vec3<i32>) -> u32 {
+// Raw 16 bits of a voxel: material in the low 12, fill level in the high 4 (0 =
+// full, else sixteenths of the voxel; partly filled liquids, ADR 014).
+fn voxel_raw(brick: u32, v: vec3<i32>) -> u32 {
     let i = u32(v.x + v.y * 8 + v.z * 64);
     let word = brick_pool[brick * 256u + (i >> 1u)];
     return (word >> ((i & 1u) * 16u)) & 0xffffu;
+}
+
+fn voxel_material(brick: u32, v: vec3<i32>) -> u32 {
+    return voxel_raw(brick, v) & 0x0fffu;
 }
 
 fn min_axis(v: vec3<f32>) -> i32 {
@@ -149,6 +155,55 @@ fn brick_voxel(be: u32, l: vec3<i32>) -> u32 {
     return voxel_material(be, l);
 }
 
+// Raw 16 bits (material and fill level) of voxel `v`; 0 (air) outside the window.
+fn voxel_raw_at(v: vec3<i32>) -> u32 {
+    let be = brick_at(v);
+    if be == EMPTY {
+        return 0u;
+    }
+    if (be & UNIFORM_BIT) != 0u {
+        return be & 0x0fffu;
+    }
+    return voxel_raw(be, v & vec3<i32>(BRICK - 1));
+}
+
+// Fraction of the voxel a raw value fills (1 unless a partly filled liquid).
+fn raw_fill(raw: u32) -> f32 {
+    let level = raw >> 12u;
+    return select(f32(level) / 16.0, 1.0, level == 0u);
+}
+
+// Height of the surface of liquid `m` in the column of `v`, relative to `v.y`:
+// `v`'s fill (more if the voxel above is liquid too), or below it if `v` is empty
+// over liquid; `own` where there is no liquid (walls keep the surface flat).
+fn liquid_height(v: vec3<i32>, m: u32, own: f32) -> f32 {
+    let raw = voxel_raw_at(v);
+    let here = raw & 0x0fffu;
+    if here == m {
+        let above = voxel_raw_at(v + vec3<i32>(0, 1, 0));
+        if (above & 0x0fffu) == m {
+            return 1.0 + raw_fill(above);
+        }
+        return raw_fill(raw);
+    }
+    if here == 0u {
+        let below = voxel_raw_at(v - vec3<i32>(0, 1, 0));
+        if (below & 0x0fffu) == m {
+            return raw_fill(below) - 1.0;
+        }
+    }
+    return own;
+}
+
+// Normal of the top surface of liquid `m` at voxel `v`, from the surface heights
+// of its neighbours: the water surface reads as one smooth sheet.
+fn liquid_normal(v: vec3<i32>, m: u32) -> vec3<f32> {
+    let own = raw_fill(voxel_raw_at(v));
+    let dx = liquid_height(v + vec3<i32>(1, 0, 0), m, own) - liquid_height(v - vec3<i32>(1, 0, 0), m, own);
+    let dz = liquid_height(v + vec3<i32>(0, 0, 1), m, own) - liquid_height(v - vec3<i32>(0, 0, 1), m, own);
+    return normalize(vec3<f32>(-0.5 * dx, 1.0, -0.5 * dz));
+}
+
 // Material at voxel `v` (volume-relative); air outside the window.
 fn voxel_at(v: vec3<i32>) -> u32 {
     return brick_voxel(brick_at(v), v & vec3<i32>(BRICK - 1));
@@ -170,9 +225,27 @@ fn trace_brick(ro: vec3<f32>, rd: vec3<f32>, inv: vec3<f32>, step: vec3<i32>,
     var axis = entry_axis;
     var t = t_start;
     for (var i = 0; i < 3 * BRICK; i++) {
-        let m = voxel_material(brick, v - bmin);
+        let raw = voxel_raw(brick, v - bmin);
+        let m = raw & 0x0fffu;
         if m != 0u && m != skip {
-            return Hit(true, t, m, axis, v);
+            let level = raw >> 12u;
+            if level == 0u {
+                return Hit(true, t, m, axis, v);
+            }
+            // Partly filled liquid: it fills the voxel up to `top`. Entering below
+            // it is a hit; from above, the ray hits the surface if it goes down
+            // through it before leaving the voxel.
+            let top = f32(v.y) + f32(level) / 16.0;
+            if ro.y + rd.y * t <= top + 1e-4 {
+                return Hit(true, t, m, axis, v);
+            }
+            let t_out = min(t_max.x, min(t_max.y, t_max.z));
+            if rd.y < 0.0 {
+                let ts = (top - ro.y) * inv.y;
+                if ts <= t_out {
+                    return Hit(true, ts, m, 1, v);
+                }
+            }
         }
         axis = min_axis(t_max);
         t = t_max[axis];
@@ -693,9 +766,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let ro = frame.camera_pos.xyz;
 
     var color = sky_with_sun(rd);
-    let s = find_surface(ro, rd, 0u, FAR);
+    var s = find_surface(ro, rd, 0u, FAR);
     if s.found {
         let mat = materials[s.material];
+        // Liquid surfaces: smooth normal from the neighbouring fill levels.
+        if mat.params.y > 0.0 && !s.is_body && s.normal.y > 0.5 {
+            s.normal = liquid_normal(s.voxel, s.material);
+        }
         color = shade(s, ro, rd);
 
         // One layer of transparency: look past the translucent material and blend by

@@ -947,12 +947,32 @@ impl Simulation {
     fn apply_move(&mut self, world: &mut World, mv: &Move) -> bool {
         if world.voxel(mv.src) != Some(mv.src_material)
             || world.voxel(mv.dst) != Some(mv.dst_material)
+            || world.level(mv.src) != Some(mv.src_level)
+            || world.level(mv.dst) != Some(mv.dst_level)
         {
             return false;
         }
         if mv.react {
-            world.set_voxel(mv.src, mv.src_into);
-            world.set_voxel(mv.dst, mv.dst_into);
+            // Partly filled liquids keep their amount on average (ADR 014).
+            let mut into = [mv.src_into, mv.dst_into];
+            for (k, (pos, level)) in [(mv.src, mv.src_level), (mv.dst, mv.dst_level)]
+                .into_iter()
+                .enumerate()
+            {
+                if into[k] == [mv.src_material, mv.dst_material][k] {
+                    continue;
+                }
+                let roll = rng::hash(self.seed ^ automaton::SALT_PARTIAL, self.tick, pos.0);
+                let (m, l) = table::partial_change(&self.table, into[k], level, roll);
+                into[k] = m;
+                world.set_voxel_level(pos, m, l);
+            }
+            let mv = Move {
+                src_into: into[0],
+                dst_into: into[1],
+                ..*mv
+            };
+            let mv = &mv;
             for (pos, old, new) in [
                 (mv.src, mv.src_material, mv.src_into),
                 (mv.dst, mv.dst_material, mv.dst_into),
@@ -976,25 +996,56 @@ impl Simulation {
             }
             return true;
         }
-        // Energy travels with the voxels. Fields are created before the swap so their
-        // composition does not count the incoming voxel twice.
+        // A swap or a liquid sharing its level. Energy travels with the voxels.
+        // Fields are created before the change so their composition does not count
+        // the incoming voxel twice.
         let (cs, ls) = mv.src.to_chunk_local();
         let (cd, ld) = mv.dst.to_chunk_local();
         let (ts, td) = (self.temperature_at(mv.src), self.temperature_at(mv.dst));
-        self.ensure_field_for(world, cd, mv.src_material, ts);
-        self.ensure_field_for(world, cs, mv.dst_material, td);
-        world.set_voxel(mv.src, mv.dst_material);
-        world.set_voxel(mv.dst, mv.src_material);
-        let table = Arc::clone(&self.table);
-        let (p_src, p_dst) = (
-            table.thermal(mv.src_material),
-            table.thermal(mv.dst_material),
-        );
-        if let Some(f) = self.thermal.get_mut(&cs) {
-            f.replace_voxel(cell_of(ls.as_ivec3()), p_src, p_dst, td);
+        let src_changes = mv.src_into != mv.src_material;
+        let dst_changes = mv.dst_into != mv.dst_material;
+        if dst_changes {
+            self.ensure_field_for(world, cd, mv.dst_into, ts);
         }
-        if let Some(f) = self.thermal.get_mut(&cd) {
-            f.replace_voxel(cell_of(ld.as_ivec3()), p_dst, p_src, ts);
+        if src_changes {
+            self.ensure_field_for(world, cs, mv.src_into, td);
+        }
+        world.set_voxel_level(mv.src, mv.src_into, mv.src_level_into);
+        world.set_voxel_level(mv.dst, mv.dst_into, mv.dst_level_into);
+        let table = Arc::clone(&self.table);
+        // A swap conserves energy; a liquid sharing its level creates or destroys
+        // some (capacity does not depend on the level), which is accounted.
+        let swap = mv.src_into == mv.dst_material && mv.dst_into == mv.src_material;
+        let ambient = self.ambient;
+        for (changes, chunk, local, old, new, t_in) in [
+            // A swap brings the other voxel's temperature; an emptied source keeps
+            // its own.
+            (
+                src_changes,
+                cs,
+                ls,
+                mv.src_material,
+                mv.src_into,
+                if swap { td } else { ts },
+            ),
+            (dst_changes, cd, ld, mv.dst_material, mv.dst_into, ts),
+        ] {
+            if !changes {
+                continue;
+            }
+            let (po, pn) = (table.thermal(old), table.thermal(new));
+            let created = match self.thermal.get_mut(&chunk) {
+                Some(f) => {
+                    let cell = cell_of(local.as_ivec3());
+                    let before = f.energy_of(cell);
+                    f.replace_voxel(cell, po, pn, t_in);
+                    f.energy_of(cell) - before + f64::from(pn.latent - po.latent)
+                }
+                None => thermal::ambient_change(po, pn, ambient),
+            };
+            if !swap {
+                self.energy_imbalance += created;
+            }
         }
         // The voxel must not move again this tick when its new chunk is processed.
         let (cpos, local) = mv.dst.to_chunk_local();

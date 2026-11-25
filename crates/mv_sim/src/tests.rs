@@ -4,7 +4,7 @@ use mv_core::config::SimConfig;
 use mv_core::{ChunkPos, WorldPos};
 use mv_materials::{MaterialId, MaterialRegistry};
 use mv_world::edit::fill_box;
-use mv_world::{Chunk, World};
+use mv_world::{Chunk, LEVELS, World};
 
 use super::*;
 
@@ -86,6 +86,30 @@ impl Fixture {
             }
         }
         n
+    }
+
+    /// Total fill levels of `m` in the box (`LEVELS` per full voxel): the amount of
+    /// liquid, conserved by the simulation.
+    fn levels(&self, m: MaterialId, min: WorldPos, max: WorldPos) -> u64 {
+        let mut n = 0;
+        for z in min.0.z..=max.0.z {
+            for y in min.0.y..=max.0.y {
+                for x in min.0.x..=max.0.x {
+                    let p = w(x, y, z);
+                    if self.world.voxel(p) == Some(m) {
+                        n += u64::from(self.world.level(p).unwrap_or(0));
+                    }
+                }
+            }
+        }
+        n
+    }
+
+    /// Height of the liquid surface of column (x, z): top voxel plus its fill.
+    fn surface(&self, m: MaterialId, x: i64, z: i64) -> f64 {
+        self.top(m, x, z).map_or(0.0, |y| {
+            y as f64 + f64::from(self.world.level(w(x, y, z)).unwrap_or(0)) / f64::from(LEVELS)
+        })
     }
 
     /// Height of the topmost `m` voxel in column (x, z), searching y in 1..64.
@@ -184,18 +208,25 @@ fn water_spreads_and_levels_in_a_basin() {
     // A 4×9×4 block of water (144 voxels) dropped in a corner: one full layer of 144.
     f.put(w(0, 6, 0), w(3, 14, 3), f.water);
     f.run(600);
-    let total = f.count(f.water, w(0, 1, 0), w(11, 20, 11));
-    assert_eq!(total, 144);
+    let total = f.levels(f.water, w(0, 1, 0), w(11, 20, 11));
+    assert_eq!(
+        total,
+        144 * u64::from(LEVELS),
+        "the amount of water is conserved"
+    );
     let mut heights = Vec::new();
     for z in 0..12 {
         for x in 0..12 {
-            heights.push(f.top(f.water, x, z).unwrap_or(0));
+            heights.push(f.surface(f.water, x, z));
         }
     }
-    let (lo, hi) = (heights.iter().min().unwrap(), heights.iter().max().unwrap());
+    let lo = heights.iter().copied().fold(f64::MAX, f64::min);
+    let hi = heights.iter().copied().fold(f64::MIN, f64::max);
+    // Fill levels make it flat, not just within a voxel (ADR 014): sharing stops
+    // below a few levels of difference, so it is flat to about 1 cm.
     assert!(
-        hi - lo <= 1,
-        "water surface must be level (heights {lo}..={hi})"
+        hi - lo < 0.15,
+        "water surface must be flat (heights {lo:.3}..={hi:.3})"
     );
 }
 
@@ -236,8 +267,12 @@ fn moves_cross_chunk_borders() {
     assert_eq!(f.count(f.sand, w(0, 1, 0), w(30, 63, 30)), 27);
     assert_eq!(f.count(f.sand, w(0, 64, 0), w(30, 127, 30)), 0);
     // The water spreads into a thin film over the open floor: count all of it.
-    let water = f.count(f.water, w(-64, 1, -64), w(127, 10, 127));
-    assert_eq!(water, 72, "water is conserved across borders");
+    let water = f.levels(f.water, w(-64, 1, -64), w(127, 10, 127));
+    assert_eq!(
+        water,
+        72 * u64::from(LEVELS),
+        "water is conserved across borders"
+    );
     assert!(
         f.count(f.water, w(0, 1, -64), w(127, 10, 127)) > 0,
         "some water crossed x = 0"

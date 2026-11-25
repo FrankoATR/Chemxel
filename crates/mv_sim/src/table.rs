@@ -66,6 +66,31 @@ pub struct Burn {
     pub max_temp: f32,
 }
 
+/// What a voxel with fill `level` becomes when it changes into `new` (ADR 014): a
+/// liquid product keeps the level; any other product of a partly filled voxel
+/// appears with probability `level / LEVELS` (so the expected amount is conserved:
+/// a nearly empty water voxel does not boil into a whole voxel of steam), otherwise
+/// the voxel becomes air. `roll` is a uniform random number.
+pub fn partial_change(
+    table: &MaterialTable,
+    new: MaterialId,
+    level: u8,
+    roll: u32,
+) -> (MaterialId, u8) {
+    use mv_world::LEVELS;
+    if level == LEVELS || new.is_air() {
+        return (new, LEVELS);
+    }
+    if table.get(new).kind == Kind::Liquid {
+        return (new, level);
+    }
+    if (u64::from(roll) * u64::from(LEVELS)) >> 32 < u64::from(level) {
+        (new, LEVELS)
+    } else {
+        (MaterialId::AIR, LEVELS)
+    }
+}
+
 /// Thermal properties (ADR 007).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThermalProps {

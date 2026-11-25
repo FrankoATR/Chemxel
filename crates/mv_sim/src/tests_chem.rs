@@ -67,6 +67,23 @@ impl Fixture {
         }
     }
 
+    /// Amount of `name` in the box, in voxels (partly filled liquid voxels count
+    /// their fill).
+    fn volume(&self, name: &str, min: WorldPos, max: WorldPos) -> f64 {
+        let m = self.id(name);
+        let mut n = 0u64;
+        for z in min.0.z..=max.0.z {
+            for y in min.0.y..=max.0.y {
+                for x in min.0.x..=max.0.x {
+                    if self.world.voxel(w(x, y, z)) == Some(m) {
+                        n += u64::from(self.world.level(w(x, y, z)).unwrap_or(0));
+                    }
+                }
+            }
+        }
+        n as f64 / f64::from(mv_world::LEVELS)
+    }
+
     fn count(&self, name: &str, min: WorldPos, max: WorldPos) -> usize {
         let m = self.id(name);
         let mut n = 0;
@@ -215,7 +232,7 @@ fn water_and_lava_make_obsidian_at_the_interface() {
         "{interior} of {obsidian} obsidian voxels inside the pool"
     );
     assert!(
-        f.count("water", ALL.0, ALL.1) < 256,
+        f.volume("water", ALL.0, ALL.1) < 256.0,
         "some water boiled off"
     );
 }
@@ -395,29 +412,37 @@ fn basin(f: &mut Fixture) {
 }
 
 #[test]
-fn an_incomplete_top_layer_evaporates_and_the_pool_settles() {
+fn an_incomplete_top_layer_spreads_into_a_flat_partial_layer_and_settles() {
     let mut f = fixture();
     basin(&mut f);
     // Two full layers (288 voxels) plus 40 voxels of a third one.
     f.place(w(0, 1, 0), w(11, 2, 11), "water");
     f.place(w(0, 3, 0), w(4, 3, 7), "water");
-    let mut vapour = 0;
-    for _ in 0..2000 {
-        f.run(1);
-        vapour += f.sim.stats().evaporations;
-    }
+    f.run(2000);
     let inside = (w(0, 1, 0), w(11, 10, 11));
-    assert_eq!(
-        f.count("water", w(0, 1, 0), w(11, 2, 11)),
-        288,
+    // Nothing is lost: it does not evaporate (ADR 014), the 40 voxels spread out.
+    let volume = f.volume("water", inside.0, inside.1);
+    assert!((volume - 328.0).abs() < 1e-9, "volume {volume}");
+    assert_eq!(f.sim.stats().evaporations, 0);
+    assert!(
+        (f.volume("water", w(0, 1, 0), w(11, 2, 11)) - 288.0).abs() < 1e-9,
         "full layers stay"
     );
-    assert_eq!(
-        f.count("water", w(0, 3, 0), w(11, 10, 11)),
-        0,
-        "the incomplete layer is gone"
-    );
-    assert!(vapour >= 40, "it evaporated into vapour ({vapour})");
+    // The third layer covers the whole basin at the same height.
+    let levels: Vec<u8> = (0..12)
+        .flat_map(|z| (0..12).map(move |x| (x, z)))
+        .map(|(x, z)| {
+            if f.world.voxel(w(x, 3, z)) == Some(f.id("water")) {
+                f.world.level(w(x, 3, z)).unwrap_or(0)
+            } else {
+                0
+            }
+        })
+        .collect();
+    // Sharing stops once neighbours are within one level, so a residual slope of
+    // at most one level per cell may stay: 22 cells corner to corner, 0.09 voxels.
+    let (lo, hi) = (levels.iter().min().unwrap(), levels.iter().max().unwrap());
+    assert!(*lo > 0 && hi - lo <= 24, "top layer levels {lo}..={hi}");
     // And then the pool is still.
     let before = snapshot(&f, "water", inside.0, inside.1);
     f.run(60);
@@ -454,12 +479,24 @@ const WEATHER: &str = r#"[
 ]"#;
 
 #[test]
-fn a_loose_drop_turns_into_its_evaporation_product() {
+fn a_thin_film_on_the_ground_turns_into_its_evaporation_product() {
     let mut f = fixture_with(WEATHER, "[]");
-    f.place(w(10, 1, 10), w(10, 1, 10), "goo");
+    // A film thinner than the spreading threshold evaporates where it is.
+    let goo = f.id("goo");
+    f.world.set_voxel_level(w(10, 1, 10), goo, 40);
+    f.sim.wake_box(&f.world, w(10, 1, 10), w(10, 1, 10));
     f.run(3);
     assert_eq!(f.count("goo", ALL.0, ALL.1), 0);
-    assert_eq!(f.count("crust", ALL.0, ALL.1), 1);
+    // A full drop first spreads into films, which then evaporate too. Each film
+    // leaves crust with the probability of its fill, so about one voxel of crust
+    // comes out of one voxel of goo.
+    f.place(w(20, 1, 20), w(20, 1, 20), "goo");
+    f.run(100);
+    assert_eq!(f.count("goo", ALL.0, ALL.1), 0);
+    assert!(
+        f.count("crust", ALL.0, ALL.1) <= 4,
+        "about one voxel of crust"
+    );
 }
 
 #[test]

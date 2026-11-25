@@ -402,11 +402,19 @@ pub fn transitions(
             if let Some(into) = p.change_at(t, params.hysteresis) {
                 let rate = p.rate.unwrap_or(params.rate);
                 if rng::hash(params.seed ^ SALT_PHASE, params.tick, world) < rate {
+                    // A partly filled liquid keeps its amount on average (ADR 014).
+                    let roll = rng::hash(
+                        params.seed ^ crate::automaton::SALT_PARTIAL,
+                        params.tick,
+                        world,
+                    );
+                    let (into, level) =
+                        crate::table::partial_change(table, into, chunk.level(lp), roll);
                     if table.get(m).kind == Kind::Static && table.get(into).kind != Kind::Static {
                         out.solid_lost.push(pi);
                     }
                     out.imbalance += field.change_voxel(c, p, table.thermal(into), f32::INFINITY);
-                    chunk.set(lp, into);
+                    chunk.set_with_level(lp, into, level);
                     out.changed.include(pi);
                     out.count += 1;
                 }

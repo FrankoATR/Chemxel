@@ -7,8 +7,12 @@
 //!
 //! Rules by [`Kind`]:
 //! * **Powder:** fall; else slide to one of the 4 lower diagonals (random order).
-//! * **Liquid:** fall; else lower diagonals; else flow sideways up to `dispersion`
-//!   cells in one of the 4 horizontal directions (random order).
+//! * **Liquid** (ADR 014): every liquid voxel has a fill level (1..=`LEVELS`). It
+//!   falls whole (with its level) or slides down a diagonal; else pours into a partly
+//!   filled voxel of the same liquid below; else shares its level with its 4
+//!   neighbours: half the difference with the same liquid, half of itself into air
+//!   (only over an edge, or if it holds at least `min_split` levels: surface
+//!   tension). Viscous liquids (`dispersion` < 4) share only some ticks.
 //! * **Gas** (and fire): rise; else upper diagonals; else drift one cell sideways.
 //!
 //! "Moving" is always a swap with the target: a denser material sinks through a
@@ -23,11 +27,11 @@
 use glam::{I64Vec3, IVec3};
 use mv_core::consts::CHUNK_SIZE;
 use mv_core::{LocalPos, WorldPos};
-use mv_world::{BrickRef, Chunk, MaterialId};
+use mv_world::{BrickRef, Chunk, LEVELS, MaterialId};
 
 use crate::aabb::Aabb;
 use crate::rng;
-use crate::table::{Kind, MaterialTable, Props, Rule};
+use crate::table::{Kind, MaterialTable, Props, Rule, partial_change};
 use crate::thermal::{ThermalChunk, ambient_change, cell_of, unstable_at};
 
 const N: i32 = CHUNK_SIZE as i32;
@@ -60,18 +64,30 @@ const FACES: [IVec3; 6] = [
 const SALT_REACT: u64 = 0x5EAC_7104;
 const SALT_DECAY: u64 = 0xDECA_7000;
 const SALT_EVAPORATE: u64 = 0xE7A9_0A7E;
-const SALT_WANDER: u64 = 0x3A9D_E512;
-/// Chance per tick that a resting liquid voxel with free space beside it moves.
-const WANDER: u32 = u32::MAX / 8;
+const SALT_VISCOUS: u64 = 0x3A9D_E512;
+/// Smallest level difference that makes a liquid share (3 % of a voxel, below
+/// what the renderer shows): without it, an endless tail of invisible one- and
+/// two-level flows keeps big lakes awake.
+const SHARE_MIN: u8 = 8;
+/// Thinnest film that pours over an edge (6 % of a voxel).
+const POUR_MIN: u8 = 16;
+/// Salt of the roll deciding what a partly filled liquid voxel changes into.
+pub const SALT_PARTIAL: u64 = 0x9A27_1A15;
 
 /// A change across a chunk border, applied after the phase if both cells still hold
-/// what the task saw: a swap (movement) or a reaction.
+/// what the task saw (materials and fill levels): a swap (movement), a liquid
+/// sharing its level, or a reaction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Move {
     pub src: WorldPos,
     pub dst: WorldPos,
     pub src_material: MaterialId,
     pub dst_material: MaterialId,
+    /// Fill levels seen by the task, and those to write.
+    pub src_level: u8,
+    pub dst_level: u8,
+    pub src_level_into: u8,
+    pub dst_level_into: u8,
     /// For reactions: the products and the extra heat. A swap leaves them as the
     /// swapped materials and `heat = 0`.
     pub src_into: MaterialId,
@@ -166,6 +182,23 @@ impl View<'_> {
         let slot = (c.x + 1) + (c.y + 1) * 3 + (c.z + 1) * 9;
         let chunk = self.neighbors.get(slot as usize).copied().flatten()?;
         Some(chunk.get(local(p.rem_euclid(IVec3::splat(N)))))
+    }
+
+    /// Fill level at chunk-local `p` (full if not loaded).
+    #[inline]
+    fn level(&self, p: IVec3) -> u8 {
+        if inside(p) {
+            return self.center.level(local(p));
+        }
+        let c = p.div_euclid(IVec3::splat(N));
+        let slot = (c.x + 1) + (c.y + 1) * 3 + (c.z + 1) * 9;
+        self.neighbors
+            .get(slot as usize)
+            .copied()
+            .flatten()
+            .map_or(LEVELS, |chunk| {
+                chunk.level(local(p.rem_euclid(IVec3::splat(N))))
+            })
     }
 }
 
@@ -386,6 +419,10 @@ impl Sweep<'_, '_> {
                 dst: WorldPos(self.view.origin + q.as_i64vec3()),
                 src_material: a,
                 dst_material: b,
+                src_level: self.view.level(p),
+                dst_level: self.view.level(q),
+                src_level_into: LEVELS,
+                dst_level_into: LEVELS,
                 src_into: rule.into_a,
                 dst_into: rule.into_b,
                 heat: rule.heat,
@@ -409,7 +446,8 @@ impl Sweep<'_, '_> {
     }
 
     /// Turns the voxel at `p` (inside the chunk) from `old` into `new`, with the
-    /// energy bookkeeping of an in-place change.
+    /// energy bookkeeping of an in-place change. A partly filled liquid keeps its
+    /// amount on average (see [`partial_change`]).
     fn change_in_place(&mut self, p: IVec3, old: MaterialId, new: MaterialId) {
         let i = local(p).index();
         self.moved[i >> 6] |= 1 << (i & 63);
@@ -417,6 +455,9 @@ impl Sweep<'_, '_> {
             return;
         }
         let table = self.ctx.table;
+        let level = self.view.center.level(local(p));
+        let (new, new_level) =
+            partial_change(table, new, level, self.random_salted(p, SALT_PARTIAL));
         if table.get(old).kind == Kind::Static && table.get(new).kind != Kind::Static {
             self.out.solid_lost.push(p);
         }
@@ -429,7 +470,7 @@ impl Sweep<'_, '_> {
                     unstable_at(table, new, self.ctx.ambient, self.ctx.hysteresis);
             }
         }
-        self.view.center.set(local(p), new);
+        self.view.center.set_with_level(local(p), new, new_level);
         self.out.changed.include(p);
     }
 
@@ -457,9 +498,10 @@ impl Sweep<'_, '_> {
     #[inline]
     fn swap(&mut self, p: IVec3, q: IVec3, m: MaterialId, t: MaterialId) {
         self.out.moves += 1;
+        let (lp, lq) = (self.view.level(p), self.view.level(q));
         if inside(q) {
-            self.view.center.set(local(p), t);
-            self.view.center.set(local(q), m);
+            self.view.center.set_with_level(local(p), t, lq);
+            self.view.center.set_with_level(local(q), m, lp);
             if let Some(field) = self.view.thermal.as_deref_mut() {
                 let table = self.ctx.table;
                 field.advect(cell_of(p), cell_of(q), table.thermal(m), table.thermal(t));
@@ -476,6 +518,10 @@ impl Sweep<'_, '_> {
                 dst: WorldPos(self.view.origin + q.as_i64vec3()),
                 src_material: m,
                 dst_material: t,
+                src_level: lp,
+                dst_level: lq,
+                src_level_into: lq,
+                dst_level_into: lp,
                 src_into: t,
                 dst_into: m,
                 heat: 0.0,
@@ -517,58 +563,157 @@ impl Sweep<'_, '_> {
         self.try_dirs(p, m, props, &DOWN_DIAGONALS, r, Dir::Down)
     }
 
-    /// Liquids fall, then spread sideways towards somewhere they can drop within
-    /// `dispersion`, or while more of the same liquid presses from above (a column
-    /// spreading out). Otherwise they mostly rest: they only wander one cell with a
-    /// small chance per tick, enough for wide terraces to level out. Loose surface
-    /// voxels at rest evaporate (ADR 012), which clears incomplete top layers; once
-    /// no voxel has free space beside it the chunk sleeps.
+    /// Liquids (ADR 014): fall whole, else pour into a partly filled voxel of the
+    /// same liquid below (and keep going with the rest), else share their fill
+    /// level with the 4 neighbours (partly filled ones with the lowest voxel up to
+    /// `dispersion` cells along the surface). A voxel splits into air beside it
+    /// over an edge (pours down, unless thinner than `POUR_MIN`), on top of more of
+    /// the same liquid, or over the ground if it holds at least `min_split` levels,
+    /// so a puddle stops spreading instead of creeping on forever. Thin films on
+    /// the ground evaporate slowly. Once no neighbour differs by `SHARE_MIN` levels
+    /// or more, the chunk sleeps.
     fn liquid(&mut self, p: IVec3, m: MaterialId, props: Props) {
         if self.fall(p, m, props) {
             return;
         }
-        let above = self.view.get(p + IVec3::Y);
-        let pressed = above == Some(m);
+        let mut f = self.view.center.level(local(p));
+        let below = p - IVec3::Y;
+        if self.view.get(below) == Some(m) {
+            let fb = self.view.level(below);
+            if fb < LEVELS {
+                // Fill the voxel below, then keep sharing what is left sideways:
+                // the edge of a mound must spill outwards, not only trickle down
+                // into the layer under it.
+                let amount = f.min(LEVELS - fb);
+                if !self.transfer(p, below, m, m, f, fb, amount) || amount == f {
+                    return;
+                }
+                f -= amount;
+            }
+        }
+        // Viscous liquids share only `dispersion`/4 of the ticks.
+        let sluggish = props.dispersion < 4
+            && (self.random_salted(p, SALT_VISCOUS) >> 30) >= u32::from(props.dispersion);
+        // Half a voxel (three quarters for viscous liquids) before a puddle spreads
+        // over the ground: thinner sheets would multiply the voxels to simulate.
+        let min_split = if props.dispersion >= 4 {
+            LEVELS / 2
+        } else {
+            LEVELS / 4 * 3
+        };
         let r = self.random(p);
-        let reach = i32::from(props.dispersion);
-        // First free spot beside the voxel without a drop behind it (for wandering).
-        let mut beside = None;
+        // Long reach only for partly filled voxels (a lake's top layer, which must
+        // level out); full ones inside a pool only push into their neighbours.
+        let reach = if f < LEVELS {
+            i32::from(props.dispersion.max(1))
+        } else {
+            1
+        };
+        let mut shared = false;
         for d in shuffled(&SIDES, r >> 3) {
-            let mut target = None;
-            let mut drop = false;
-            for k in 1..=reach {
-                let q = p + d * k;
-                let Some(t) = self.enterable(m, props, q, Dir::Side) else {
-                    break;
-                };
-                if k == 1 && beside.is_none() {
-                    beside = Some((q, t));
+            let mut q = p + d;
+            let Some(t) = self.view.get(q) else {
+                continue;
+            };
+            // (amount to move, level at the target, material at the target)
+            let (amount, fq, t) = if t == m {
+                // Share with the lowest voxel up to `dispersion` cells along the
+                // same surface: a lake levels out `dispersion`² times faster than
+                // with the nearest neighbour only (and flatter, see ADR 014).
+                let mut fq = self.view.level(q);
+                for k in 2..=reach {
+                    let next = p + d * k;
+                    if self.view.get(next) != Some(m) {
+                        break;
+                    }
+                    let level = self.view.level(next);
+                    if level < fq {
+                        (q, fq) = (next, level);
+                    }
                 }
-                target = Some((q, t));
-                // Stop at an edge: the voxel falls from there next tick.
-                if self.enterable(m, props, q - IVec3::Y, Dir::Down).is_some() {
-                    drop = true;
-                    break;
+                let diff = f.saturating_sub(fq);
+                (if diff >= SHARE_MIN { diff / 2 } else { 0 }, fq, m)
+            } else if t.is_air() {
+                let under = q - IVec3::Y;
+                let on_pool = self.view.get(under) == Some(m);
+                if on_pool && self.view.level(under) < LEVELS {
+                    // Onto a lower, partly filled voxel of the same liquid.
+                    (if f >= 2 { f / 2 } else { f }, 0, t)
+                } else if self.enterable(m, props, under, Dir::Down).is_some() {
+                    // Over an edge: pour half (all of a small remainder). A film
+                    // thinner than `POUR_MIN` clings to the ground instead (and
+                    // evaporates), or rough slopes would drip forever.
+                    if f >= 2 * POUR_MIN {
+                        (f / 2, 0, t)
+                    } else if f >= POUR_MIN {
+                        (f, 0, t)
+                    } else {
+                        (0, 0, t)
+                    }
+                } else if on_pool && self.view.get(below) == Some(m) {
+                    // A film on top of a full layer: pour straight into a lower,
+                    // partly filled voxel of that layer up to `dispersion` cells
+                    // away (else the film only drains through the full voxels
+                    // under it, very slowly); or spread over the layer.
+                    let mut lower = None;
+                    for k in 2..=reach {
+                        let c = p + d * k;
+                        if !self.view.get(c).is_some_and(MaterialId::is_air)
+                            || self.view.get(c - IVec3::Y) != Some(m)
+                        {
+                            break;
+                        }
+                        let level = self.view.level(c - IVec3::Y);
+                        if level < LEVELS {
+                            lower = Some((c - IVec3::Y, level));
+                            break;
+                        }
+                    }
+                    match lower {
+                        Some((c, level)) => {
+                            q = c;
+                            (f.min(LEVELS - level), level, m)
+                        }
+                        None if f >= SHARE_MIN => (f / 2, 0, t),
+                        None => (0, 0, t),
+                    }
+                } else if f >= min_split || (f >= SHARE_MIN && on_pool) {
+                    // Over ground only past the surface tension threshold.
+                    (f / 2, 0, t)
+                } else {
+                    (0, 0, t)
                 }
+            } else {
+                (0, 0, t)
+            };
+            if amount == 0 {
+                continue;
             }
-            if let Some((q, t)) = target
-                && (drop || pressed)
-            {
-                self.swap(p, q, m, t);
+            if sluggish {
+                // It would flow: try again next tick.
+                self.out.live.include(p);
+                return;
+            }
+            // Across a border the change is applied after the phase, against the
+            // level seen now: share no further this tick.
+            if !self.transfer(p, q, m, t, f, fq, amount) {
+                return;
+            }
+            shared = true;
+            f -= amount;
+            if f == 0 {
                 return;
             }
         }
-        // Nowhere to drop nearby: wander one cell now and then, so wide terraces
-        // still level out, but an eighth as restless as moving every tick.
-        if let Some((q, t)) = beside {
-            if self.random_salted(p, SALT_WANDER) < WANDER {
-                self.swap(p, q, m, t);
-                return;
-            }
-            self.out.live.include(p);
+        if shared {
+            return;
         }
-        // At rest. A loose voxel on the surface (air above) evaporates slowly.
-        if props.evaporate != 0 && above.is_some_and(MaterialId::is_air) && self.loose(p, m) {
+        // At rest. A thin film on the ground (not a pool's top layer) evaporates.
+        if props.evaporate != 0
+            && f < min_split
+            && self.view.get(below) != Some(m)
+            && self.view.get(p + IVec3::Y).is_some_and(MaterialId::is_air)
+        {
             if self.random_salted(p, SALT_EVAPORATE) < props.evaporate {
                 self.change_in_place(p, m, props.evaporates_into);
                 self.out.evaporations += 1;
@@ -578,20 +723,89 @@ impl Sweep<'_, '_> {
         }
     }
 
-    /// Whether the liquid voxel at `p` is loose: at most one neighbour of the same
-    /// liquid beside it (a drop, a bump on a full layer), or next to a hole in its
-    /// layer (air beside it with the same liquid under that air).
-    fn loose(&self, p: IVec3, m: MaterialId) -> bool {
-        let mut same = 0;
-        for d in SIDES {
-            let q = p + d;
-            match self.view.get(q) {
-                Some(n) if n == m => same += 1,
-                Some(n) if n.is_air() && self.view.get(q - IVec3::Y) == Some(m) => return true,
-                _ => {}
-            }
+    /// Moves `amount` levels of liquid `m` from `p` (level `fp`, inside the chunk)
+    /// to `q` (material `t`: `m` with level `fq`, or air). `p` becomes air if
+    /// emptied. Energy moves with the liquid where materials change. Returns
+    /// `false` if `q` is across the border (queued, applied after the phase).
+    #[allow(clippy::too_many_arguments)]
+    fn transfer(
+        &mut self,
+        p: IVec3,
+        q: IVec3,
+        m: MaterialId,
+        t: MaterialId,
+        fp: u8,
+        fq: u8,
+        amount: u8,
+    ) -> bool {
+        self.out.moves += 1;
+        let (lp, lq) = (fp - amount, fq + amount);
+        let src_into = if lp == 0 { MaterialId::AIR } else { m };
+        let lp = if lp == 0 { LEVELS } else { lp };
+        let i = local(p).index();
+        self.moved[i >> 6] |= 1 << (i & 63);
+        if !inside(q) {
+            self.out.outbox.push(Move {
+                src: WorldPos(self.view.origin + p.as_i64vec3()),
+                dst: WorldPos(self.view.origin + q.as_i64vec3()),
+                src_material: m,
+                dst_material: t,
+                src_level: fp,
+                dst_level: if t == m { fq } else { LEVELS },
+                src_level_into: lp,
+                dst_level_into: lq,
+                src_into,
+                dst_into: m,
+                heat: 0.0,
+                heat_cap: f32::INFINITY,
+                react: false,
+            });
+            return false;
         }
-        same <= 1
+        self.view.center.set_with_level(local(p), src_into, lp);
+        self.view.center.set_with_level(local(q), m, lq);
+        // Energy. A voxel's heat capacity (and latent heat) does not depend on its
+        // level, so a liquid voxel appearing in air (or a source emptying into more
+        // of the same liquid) creates (or destroys) energy: accounted (ADR 007).
+        let table = self.ctx.table;
+        let (pm, pt, pa) = (
+            table.thermal(m),
+            table.thermal(t),
+            table.thermal(MaterialId::AIR),
+        );
+        let (cp, cq) = (cell_of(p), cell_of(q));
+        let ambient = self.ctx.ambient;
+        let field = self.view.thermal.as_deref_mut();
+        let created = match (src_into == m, t == m) {
+            // The whole voxel moved into air: like a swap.
+            (false, false) => {
+                if let Some(f) = field {
+                    f.advect(cp, cq, pm, pt);
+                }
+                None
+            }
+            // New liquid where there was air, at the source's temperature.
+            (true, false) => Some((cq, pt, pm, field)),
+            // The source emptied into more of the same liquid.
+            (false, true) => Some((cp, pm, pa, field)),
+            (true, true) => None,
+        };
+        if let Some((cell, old, new, field)) = created {
+            self.out.imbalance += match field {
+                Some(f) => {
+                    let t_in = f.temp[cp];
+                    let before = f.energy_of(cell);
+                    f.replace_voxel(cell, old, new, t_in);
+                    f.energy_of(cell) - before + f64::from(new.latent - old.latent)
+                }
+                None => ambient_change(old, new, ambient),
+            };
+        }
+        let j = local(q).index();
+        self.moved[j >> 6] |= 1 << (j & 63);
+        self.out.changed.include(p);
+        self.out.changed.include(q);
+        true
     }
 
     fn gas(&mut self, p: IVec3, m: MaterialId, props: Props) {

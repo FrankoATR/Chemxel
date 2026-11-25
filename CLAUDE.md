@@ -110,6 +110,7 @@ descarta el atraso (evita la espiral de muerte).
 
 **Guardado (ADR 011):**
 - **`persist`:** formato `CXCH` versionado: paleta de nombres + RLE varint + Adler-32.
+  La versión 2 añade los niveles de llenado (ADR 014); la 1 se lee como llena.
 - **`store::ChunkStore`:** un archivo por chunk modificado, escritura atómica.
 - **Streaming:** `Streamer::set_store` hace que cargue del disco y escriba al descargar.
   `take_restored` lista los chunks devueltos, y la app llama a
@@ -143,10 +144,30 @@ Nada de `unsafe`.
 **Reglas** (`automaton.rs`): todo movimiento es un intercambio ordenado por densidad
 (`Sweep::enterable`); el barrido va de abajo arriba y alterna el sentido en x y z.
 
-**Líquidos y nubes (ADR 012):**
-- **Reposo:** un líquido solo va de lado hacia una caída o con el mismo líquido
-  encima; si no, reposa (deambula con 1/8 por tick).
-- **Evaporación:** los sueltos de la superficie en reposo pasan a `evaporates_into`.
+**Líquidos con nivel de llenado (ADR 014):**
+- **Nivel:** cada vóxel líquido lleva un nivel 1..=`LEVELS` (255), guardado aparte en
+  el `Chunk` (`level`, `set_with_level`, `brick_levels`). Solo existe en bricks densos,
+  y sin nivel guardado el vóxel está lleno.
+- **Reglas** (`automaton::liquid`):
+  - cae entero (con su nivel);
+  - si no, se vierte en el mismo líquido a medio llenar de abajo y sigue con el resto;
+  - si no, reparte la mitad de la diferencia con sus vecinos (los parciales, hasta
+    `dispersion` celdas por la superficie);
+  - al aire, solo por un borde (≥ `POUR_MIN`), sobre su propio líquido, o sobre el
+    suelo con ≥ `min_split` (tensión superficial);
+  - no reparte por debajo de `SHARE_MIN` de diferencia, y así los chunks se duermen.
+- **Entre chunks:** `transfer` va por la cola de `Move` con los niveles esperados.
+- **Cambios de un parcial** (reacción, fase, evaporación): `table::partial_change`.
+  Otro líquido conserva el nivel; cualquier otra cosa aparece con probabilidad
+  nivel/255.
+- **Energía:** la capacidad no depende del nivel, y lo que se crea o destruye va a
+  `energy_imbalance`.
+- **GPU:** el nivel va en los 4 bits altos del vóxel (16 alturas). `raymarch.wgsl`
+  corta el vóxel a su altura y `liquid_normal` suaviza la superficie.
+
+**Nubes (ADR 012):**
+- **Evaporación:** las películas finas sobre el suelo, en reposo, pasan a
+  `evaporates_into`.
 - **Vapor:** al morir deposita `ceiling_into` en su `ceiling` (`deposit_at_ceiling`).
 - **Nubes:** `drifts: false` y con `lifetime`; se desvanecen en `slow_pass` cada
   `SLOW_PERIOD` sin mantener vivo el chunk.

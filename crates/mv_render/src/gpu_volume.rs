@@ -174,6 +174,15 @@ pub struct GpuVolume {
     pool_full_warned: bool,
 }
 
+/// Fill level as the shader sees it: 0 = full, else 1..=15 sixteenths of the voxel.
+fn gpu_level(stored: u8) -> u32 {
+    if stored == 0 {
+        0
+    } else {
+        ((u32::from(stored) * 16 + 128) / u32::from(mv_world::LEVELS)).clamp(1, 15)
+    }
+}
+
 impl GpuVolume {
     pub fn new(device: &wgpu::Device, desc: &VolumeDesc) -> Self {
         let limits = device.limits();
@@ -378,7 +387,14 @@ impl GpuVolume {
         for brick in bricks.iter() {
             let view = chunk.brick(brick);
             let entry = self.chunk_bricks[base + brick];
-            let new_entry = match view.uniform_material() {
+            // Bricks with partly filled liquid voxels are always uploaded dense.
+            let levels = chunk.brick_levels(brick);
+            let uniform = if levels.is_some() {
+                None
+            } else {
+                view.uniform_material()
+            };
+            let new_entry = match uniform {
                 Some(m) => {
                     if is_slot(entry) {
                         self.brick_slots.free(entry);
@@ -404,14 +420,15 @@ impl GpuVolume {
                     let BrickRef::Dense(voxels) = view else {
                         unreachable!("non-uniform brick view is dense");
                     };
+                    // 16 bits per voxel: material in the low 12, fill level in the
+                    // high 4 (0 = full; ADR 014).
+                    let gpu = |i: usize| {
+                        let level = levels.map_or(0, |l| gpu_level(l[i]));
+                        u32::from(voxels[i].0 & 0x0fff) | (level << 12)
+                    };
                     self.packed.clear();
-                    self.packed.extend(
-                        voxels
-                            .as_chunks::<2>()
-                            .0
-                            .iter()
-                            .map(|[lo, hi]| u32::from(lo.0) | (u32::from(hi.0) << 16)),
-                    );
+                    self.packed
+                        .extend((0..voxels.len() / 2).map(|k| gpu(2 * k) | (gpu(2 * k + 1) << 16)));
                     queue.write_buffer(
                         &self.brick_pool_buf,
                         u64::from(pool_slot) * BRICK_BYTES,

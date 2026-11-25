@@ -40,7 +40,7 @@ Registro de materiales y reacciones de Chemxel.
 | `latent_heat` | número | `0` | Energía latente por vóxel respecto a la fase más baja; en combustibles, la que libera al arder (ver abajo) |
 | `heat_loss` | 0–1 | `0` | Calor perdido al entorno por vóxel, tick y grado sobre el ambiente (convección que la grilla no modela; sobre todo el aire) |
 | `emissive` | número | `0` | Intensidad de luz emitida |
-| `dispersion` | entero 0–255 | `0` | Líquidos: celdas que se expanden en horizontal por tick. Gases: celdas que suben por tick |
+| `dispersion` | entero 0–255 | `0` | Líquidos (ADR 014): fluidez. Hasta cuántas celdas de su superficie compara su nivel para nivelarse (agua 5); por debajo de 4 es viscoso: reparte solo `dispersion`/4 de los ticks y un charco deja de extenderse a ¾ de vóxel en vez de a ½ (lava 1). Gases: celdas que suben por tick |
 | `lifetime` | `(min, max)` ticks | ninguno | Vida aleatoria; al expirar el vóxel se transforma en `decays_into` |
 | `decays_into` | nombre | `air` | Producto cuando expira el `lifetime` |
 | `evaporates_into` / `evaporate_rate` | nombre / 0–1 | ninguno | Líquidos: en qué se convierte un vóxel suelto de la superficie en reposo (gota, bulto sobre una capa llena, borde de un hueco en una capa incompleta) y probabilidad por tick |

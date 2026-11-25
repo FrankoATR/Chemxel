@@ -1,6 +1,7 @@
 # 012 — Líquidos en reposo, evaporación y nubes
 
-- **Estado:** aceptada
+- **Estado:** aceptada; la regla de reposo y la evaporación de los sueltos quedan
+  sustituidas por los niveles de llenado (ADR 014). El vapor y las nubes siguen igual.
 - **Fecha:** 2026-11-25
 - **Contexto:** petición del usuario tras el hito 8
 
