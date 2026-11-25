@@ -76,6 +76,8 @@ pub struct ThermalProps {
     pub latent: f32,
     /// Temperature the material is created at by edits.
     pub base_temperature: Option<f32>,
+    /// Chance per tick of its phase changes, if it overrides the default.
+    pub rate: Option<u32>,
     /// Changes above a temperature, highest threshold first (boil before melt).
     pub up: [Option<Change>; 2],
     /// Change below a temperature (freeze / condense).
@@ -241,6 +243,7 @@ impl MaterialTable {
                     loss: m.heat_loss.max(0.0),
                     latent: m.latent_heat,
                     base_temperature: m.base_temperature,
+                    rate: m.transition_rate.map(chance),
                     up,
                     down: change(m.freeze),
                     burn,

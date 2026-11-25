@@ -399,7 +399,8 @@ pub fn transitions(
             let t = field.temp[c];
             let world = origin + pi.as_i64vec3();
             if let Some(into) = p.change_at(t, params.hysteresis) {
-                if rng::hash(params.seed ^ SALT_PHASE, params.tick, world) < params.rate {
+                let rate = p.rate.unwrap_or(params.rate);
+                if rng::hash(params.seed ^ SALT_PHASE, params.tick, world) < rate {
                     if table.get(m).kind == Kind::Static && table.get(into).kind != Kind::Static {
                         out.solid_lost.push(pi);
                     }
@@ -473,6 +474,7 @@ mod tests {
             loss: 0.0,
             latent: 0.0,
             base_temperature: None,
+            rate: None,
             up: [None; 2],
             down: None,
             burn: None,

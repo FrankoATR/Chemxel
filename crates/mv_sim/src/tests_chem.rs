@@ -508,3 +508,30 @@ fn condensing_vapour_thickens_the_cloud_downwards() {
     assert_eq!(f.at(w(10, 100, 10)), "haze");
     assert_eq!(f.at(w(10, 99, 10)), "haze");
 }
+
+#[test]
+fn a_per_material_transition_rate_slows_its_phase_changes() {
+    // Two solids created hot, above their melting point, one at a hundredth of the
+    // default rate. Each fills its own 4³ thermal cell, so neither cools the other.
+    let materials = r#"[
+        Material(name: "air",   state: Gas,    density: 1.2,  color: (0, 0, 0, 0)),
+        Material(name: "stone", state: Solid,  density: 2600, color: (1, 1, 1, 255)),
+        Material(name: "goo",   state: Liquid, density: 1000, color: (2, 2, 2, 255)),
+        Material(name: "fast",  state: Solid,  density: 1000, color: (3, 3, 3, 255),
+                 base_temperature: 400, melt_at: 100, melts_into: "goo"),
+        Material(name: "slow",  state: Solid,  density: 1000, color: (4, 4, 4, 255),
+                 base_temperature: 400, melt_at: 100, melts_into: "goo", transition_rate: 0.001),
+    ]"#;
+    let mut f = fixture_with(materials, "[]");
+    f.place(w(8, 4, 8), w(11, 7, 11), "fast");
+    f.place(w(20, 4, 8), w(23, 7, 11), "slow");
+    f.run(30);
+    assert!(
+        f.count("fast", ALL.0, ALL.1) < 10,
+        "the default rate melts it quickly"
+    );
+    assert!(
+        f.count("slow", ALL.0, ALL.1) > 50,
+        "the slow rate keeps most of it solid"
+    );
+}

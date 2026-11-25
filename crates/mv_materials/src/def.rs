@@ -68,6 +68,10 @@ pub(crate) struct Material {
     /// Temperature the material is created at and tends to (°C).
     #[serde(default)]
     pub base_temperature: Option<f32>,
+    /// Chance per tick of its temperature changes (melt, boil, freeze) once past
+    /// the threshold; default: the simulation's `transition_rate`.
+    #[serde(default)]
+    pub transition_rate: Option<f32>,
 
     #[serde(default)]
     pub melt_at: Option<f32>,

@@ -80,6 +80,8 @@ pub struct Material {
     pub drifts: bool,
     pub spreads: bool,
     pub base_temperature: Option<f32>,
+    /// Chance per tick of its phase changes (overrides the simulation default).
+    pub transition_rate: Option<f32>,
     pub melt: Option<Transition>,
     pub boil: Option<Transition>,
     pub freeze: Option<Transition>,
@@ -350,6 +352,9 @@ fn resolve(
     if d.decays_into.is_some() && d.lifetime.is_none() {
         return Err(invalid("decays_into", "needs a lifetime"));
     }
+    if d.transition_rate.is_some_and(|r| !(0.0..=1.0).contains(&r)) {
+        return Err(invalid("transition_rate", "must be within 0..=1"));
+    }
     if !(0.0..=1.0).contains(&d.evaporate_rate) {
         return Err(invalid("evaporate_rate", "must be within 0..=1"));
     }
@@ -395,6 +400,7 @@ fn resolve(
         drifts: d.drifts,
         spreads: d.spreads,
         base_temperature: d.base_temperature,
+        transition_rate: d.transition_rate,
         melt: transition(d.melt_at, &d.melts_into, "melt_at", "melts_into")?,
         boil: transition(d.boil_at, &d.boils_into, "boil_at", "boils_into")?,
         freeze: transition(d.freeze_at, &d.freezes_into, "freeze_at", "freezes_into")?,

@@ -38,7 +38,7 @@ evapora, sube y se queda como nube (sin lluvia por ahora), y la lava hace costra
      | Líquido | Se convierte en | Probabilidad por tick |
      |---|---|---|
      | Agua | `vapor` | 0,02 |
-     | Lava | `basalt` (costra oscura) | 0,03 |
+     | Lava | `basalt` (costra oscura) | 0,004 (antes 0,03; ver «Lava lenta») |
      | Ácido | aire | 0,01 |
 3. **Vapor que condensa en la capa de nubes.**
    - **Primera versión:** el vapor viajaba vóxel a vóxel hasta la altura de nubes (480,
@@ -59,6 +59,26 @@ evapora, sube y se queda como nube (sin lluvia por ahora), y la lava hace costra
 6. **Campos de material nuevos:** `evaporates_into`, `evaporate_rate`, `ceiling`,
    `ceiling_into`, `drifts` y `spreads`. Los materiales nuevos (`vapor`, `cloud`,
    `basalt`) van al final del archivo, para que los ids existentes no cambien.
+
+## Lava lenta (revisión)
+
+Petición del usuario: la lava se solidificaba demasiado rápido (un charco de 1 m × 25 cm
+sobre piedra quedaba con un 4 % fundido a los 10 s).
+
+- **Causa principal:** la piedra del suelo comparte las celdas térmicas de 4³ con la
+  lava y le roba el calor en pocos ticks. Bajar solo las probabilidades de
+  solidificación y de costra no bastaba: la lava ya estaba fría y solo se retrasaba
+  el cambio unos segundos.
+- **Campo nuevo `transition_rate`** (por material, 0–1): probabilidad por tick de sus
+  cambios de fase una vez pasado el umbral. Si falta, se usa `sim.transition_rate`.
+- **Lava:** `heat_capacity` 3,0 y `latent_heat` 3·10⁶ (más masa térmica), conductividad
+  0,8, sigue líquida hasta 300 °C (`freeze_at`), `transition_rate` 0,004 y costra
+  (`evaporate_rate`) 0,004.
+- **Resultado** (mismo charco): fundido el 84 % a los 10 s, el 62 % a los 20 s, el 34 %
+  a los 40 s, el 14 % al minuto y sólido del todo hacia los 90 s.
+- **Efecto secundario:** al llevar más energía, la lava calienta más lo que la rodea.
+- **Coste:** `sim_thermal` media 3,4 ms, máx. 4,6; `--bench-heat` media 2,7 ms, p99 4,7,
+  máx. 6,4 (0 ticks > 8 ms).
 
 ## Mediciones (enchufado)
 

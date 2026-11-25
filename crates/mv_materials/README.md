@@ -48,6 +48,7 @@ Registro de materiales y reacciones de Chemxel.
 | `drifts` | bool | `true` | Gases: si se mueven; `false` = quieto (una nube) |
 | `spreads` | bool | `true` | Gases: si se desplazan a los lados cuando no pueden subir; `false` = el vapor atrapado bajo un techo se queda quieto |
 | `base_temperature` | °C | ninguno | Temperatura con la que se crea y a la que tiende |
+| `transition_rate` | 0–1 | `sim.transition_rate` (0,1) | Probabilidad por tick de sus cambios de fase (fundirse, hervir, solidificarse) una vez pasado el umbral; más bajo = más lento |
 | `melt_at` / `melts_into` | °C / nombre | ninguno | Fusión (al superar la temperatura) |
 | `boil_at` / `boils_into` | °C / nombre | ninguno | Ebullición (al superar la temperatura) |
 | `freeze_at` / `freezes_into` | °C / nombre | ninguno | Congelación / condensación (al bajar de la temperatura) |

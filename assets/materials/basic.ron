@@ -30,11 +30,16 @@
              freeze_at: 99, freezes_into: "water"),
 
     // --- Heat ---
-    Material(name: "lava",     category: "Liquids", state: Liquid, density: 3100, color: (255, 90, 20, 255),   conductivity: 1.5,
-             heat_capacity: 1.0, emissive: 4.0, dispersion: 1, base_temperature: 1300,
-             latent_heat: 1000000,
-             freeze_at: 700, freezes_into: "stone",
-             evaporates_into: "basalt", evaporate_rate: 0.03),
+    // Lava cools and solidifies slowly: a lot of thermal mass (heat_capacity and
+    // latent_heat x3), it stays molten down to 300 °C, it solidifies at a slow rate
+    // once below that, and loose surface voxels crust over slowly. A 1 m x 25 cm
+    // pool on stone takes about 90 s to solidify completely.
+    Material(name: "lava",     category: "Liquids", state: Liquid, density: 3100, color: (255, 90, 20, 255),   conductivity: 0.8,
+             transition_rate: 0.004,
+             heat_capacity: 3.0, emissive: 4.0, dispersion: 1, base_temperature: 1300,
+             latent_heat: 3000000,
+             freeze_at: 300, freezes_into: "stone",
+             evaporates_into: "basalt", evaporate_rate: 0.004),
     Material(name: "obsidian", category: "Building", state: Solid,  density: 2400, color: (30, 20, 45, 255),    conductivity: 1.3,
              melt_at: 1300, melts_into: "lava"),
     Material(name: "glass",    category: "Building", state: Solid,  density: 2500, color: (200, 230, 235, 120), conductivity: 1.0,
