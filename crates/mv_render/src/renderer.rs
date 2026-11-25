@@ -64,6 +64,11 @@ pub struct Lighting {
     pub shadow_distance: f32,
     /// Ambient occlusion strength, 0..1 (0 disables it and the emissive glow).
     pub ao_strength: f32,
+    /// How much the shading normal is smoothed over neighbouring voxels, 0..1
+    /// (0 = flat voxel faces).
+    pub smooth_normals: f32,
+    /// Per-voxel brightness noise, 0..1 (1 = the original strong noise).
+    pub color_noise: f32,
 }
 
 impl Default for Lighting {
@@ -72,6 +77,8 @@ impl Default for Lighting {
             sun_dir: Vec3::new(0.55, 0.62, 0.32),
             shadow_distance: 768.0,
             ao_strength: 0.8,
+            smooth_normals: 0.5,
+            color_noise: 0.3,
         }
     }
 }
@@ -279,8 +286,8 @@ impl Renderer {
             lighting: [
                 self.lighting.shadow_distance.max(0.0),
                 self.lighting.ao_strength.clamp(0.0, 1.0),
-                0.0,
-                0.0,
+                self.lighting.smooth_normals.clamp(0.0, 1.0),
+                self.lighting.color_noise.clamp(0.0, 1.0),
             ],
         }
     }

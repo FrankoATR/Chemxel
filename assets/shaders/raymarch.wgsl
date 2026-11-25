@@ -44,7 +44,9 @@ struct Frame {
     fog: vec4<f32>,         // x: k, y: start s in 1 - exp(-((t - s) * k)^2), z: ambient °C
     volume_dims: vec4<u32>, // xyz: volume size in chunks, w: flags (bit 0: heat view)
     bodies: vec4<u32>,      // x: number of rigid bodies
-    lighting: vec4<f32>,    // x: shadow distance (0 = off), y: AO strength (0 = off)
+    // x: shadow distance (0 = off), y: AO strength (0 = off), z: normal smoothing
+    // (0 = flat faces), w: per-voxel colour noise (1 = full)
+    lighting: vec4<f32>,
 };
 
 struct Material {
@@ -120,30 +122,36 @@ fn min_axis(v: vec3<f32>) -> i32 {
     return 2;
 }
 
-// Material at voxel `v` (volume-relative); air outside the window.
-fn voxel_at(v: vec3<i32>) -> u32 {
+// Entry of the 8³ brick holding voxel `v` (volume-relative): EMPTY (air, also
+// outside the window), `UNIFORM_BIT | material`, or a brick pool slot.
+fn brick_at(v: vec3<i32>) -> u32 {
     let dims = vec3<i32>(frame.volume_dims.xyz);
     if any(v < vec3<i32>(0)) || any(v >= dims * CHUNK) {
-        return 0u;
+        return EMPTY;
     }
     let c = v / CHUNK;
     let entry = chunk_grid[c.x + c.y * dims.x + c.z * dims.x * dims.y];
-    if entry == EMPTY {
-        return 0u;
+    if entry == EMPTY || (entry & UNIFORM_BIT) != 0u {
+        return entry;
     }
-    if (entry & UNIFORM_BIT) != 0u {
-        return entry & 0xffffu;
-    }
-    let l = v - c * CHUNK;
-    let b = l / BRICK;
-    let be = chunk_bricks[entry * 512u + u32(b.x + b.y * 8 + b.z * 64)];
+    let b = (v - c * CHUNK) / BRICK;
+    return chunk_bricks[entry * 512u + u32(b.x + b.y * 8 + b.z * 64)];
+}
+
+// Material of voxel `l` (0..7 per axis) of a brick entry from `brick_at`.
+fn brick_voxel(be: u32, l: vec3<i32>) -> u32 {
     if be == EMPTY {
         return 0u;
     }
     if (be & UNIFORM_BIT) != 0u {
         return be & 0xffffu;
     }
-    return voxel_material(be, l - b * BRICK);
+    return voxel_material(be, l);
+}
+
+// Material at voxel `v` (volume-relative); air outside the window.
+fn voxel_at(v: vec3<i32>) -> u32 {
+    return brick_voxel(brick_at(v), v & vec3<i32>(BRICK - 1));
 }
 
 fn is_opaque(m: u32) -> bool {
@@ -376,6 +384,70 @@ fn hash3(p: vec3<i32>) -> f32 {
     return f32(h & 0xffffu) / 65535.0;
 }
 
+// Smooth value noise in 0..1: hashed lattice values blended trilinearly.
+fn value_noise(p: vec3<f32>) -> f32 {
+    let i = vec3<i32>(floor(p));
+    let f = p - floor(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let x00 = mix(hash3(i), hash3(i + vec3<i32>(1, 0, 0)), u.x);
+    let x10 = mix(hash3(i + vec3<i32>(0, 1, 0)), hash3(i + vec3<i32>(1, 1, 0)), u.x);
+    let x01 = mix(hash3(i + vec3<i32>(0, 0, 1)), hash3(i + vec3<i32>(1, 0, 1)), u.x);
+    let x11 = mix(hash3(i + vec3<i32>(0, 1, 1)), hash3(i + vec3<i32>(1, 1, 1)), u.x);
+    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+}
+
+// Does voxel material `m` count as part of the surface of `own` when smoothing
+// normals? Opaque voxels always do, a translucent one only next to itself (water
+// over stone has its own surface).
+fn surface_solid(m: u32, own: u32) -> bool {
+    return m != 0u && (m == own || is_opaque(m));
+}
+
+// Height of the surface at voxel `q` relative to the face being shaded (normal `n`):
+// +1 if it rises there (the voxel in front of `q` is solid), -1 if it drops (`q`
+// itself is empty), 0 if it continues flat.
+fn relative_height(q: vec3<i32>, n: vec3<i32>, m: u32) -> f32 {
+    if surface_solid(voxel_at(q + n), m) {
+        return 1.0;
+    }
+    if !surface_solid(voxel_at(q), m) {
+        return -1.0;
+    }
+    return 0.0;
+}
+
+// Shading normal of the face of world voxel `v` (material `m`) with normal `face`:
+// the slope of the surface around it, measured from its height 1, 2 and 3 voxels
+// away in the four directions along the face, tilts the face normal (by
+// `frame.lighting.z`). The voxel staircase on slopes then shades like the slope,
+// and edges get a soft bevel; flat faces are unchanged.
+fn smooth_normal(v: vec3<i32>, m: u32, face: vec3<f32>) -> vec3<f32> {
+    let k = frame.lighting.z;
+    if k <= 0.0 {
+        return face;
+    }
+    let n = vec3<i32>(round(face));
+    var u = vec3<i32>(0, 1, 0);
+    var w = vec3<i32>(0, 0, 1);
+    if n.y != 0 {
+        u = vec3<i32>(1, 0, 0);
+    } else if n.z != 0 {
+        u = vec3<i32>(1, 0, 0);
+        w = vec3<i32>(0, 1, 0);
+    }
+    // Slope along u and w: height differences weighted by 1/distance.
+    var su = 0.0;
+    var sw = 0.0;
+    for (var d = 1; d <= 3; d++) {
+        let inv = 1.0 / f32(d);
+        su += (relative_height(v + u * d, n, m) - relative_height(v - u * d, n, m)) * inv;
+        sw += (relative_height(v + w * d, n, m) - relative_height(v - w * d, n, m)) * inv;
+    }
+    // Normalised so a 45° staircase gives about a 45° normal.
+    let scale = k / 3.67;
+    return normalize(face - (vec3<f32>(u) * su + vec3<f32>(w) * sw) * scale);
+}
+
 fn temperature_at(v: vec3<i32>) -> f32 {
     let dims = vec3<i32>(frame.volume_dims.xyz);
     let c = v / CHUNK;
@@ -424,13 +496,18 @@ fn sky_with_sun(rd: vec3<f32>) -> vec3<f32> {
     return sky(rd) + SUN_COLOR * 20.0 * smoothstep(0.9994, 0.9998, s);
 }
 
-// Fraction of sunlight reaching `p` (just above a surface with normal `n`).
-fn sun_visibility(p: vec3<f32>, n: vec3<f32>) -> f32 {
+// Fraction of sunlight reaching `p`, a point on a face with normal `n`. The shadow
+// ray starts just off the face; on a face turned away from the sun (lit only through
+// its smoothed normal) it starts at the neighbouring air voxel along `ns` instead.
+fn sun_visibility(p: vec3<f32>, n: vec3<f32>, ns: vec3<f32>) -> f32 {
     let dist = frame.lighting.x;
-    if dist <= 0.0 || dot(n, frame.sun_dir.xyz) <= 0.0 {
+    if dist <= 0.0 {
         return 1.0;
     }
-    let o = p + n * 0.02;
+    var o = p + n * 0.02;
+    if dot(n, frame.sun_dir.xyz) <= 0.0 {
+        o = p + n * 0.5 + ns * 0.5;
+    }
     let sd = frame.sun_dir.xyz;
     var hit = trace(o, sd, 0u, dist);
     var light = 1.0;
@@ -537,13 +614,21 @@ fn shade(s: Surface, ro: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
     let mat = materials[s.material];
     let p = ro + rd * s.t;
     let n = s.normal;
-    // Per-voxel brightness noise gives surfaces texture at the voxel scale.
-    let variation = 0.84 + 0.18 * hash3(s.seed);
-    let base = mat.color.rgb * variation;
+    // Brightness texture: broad patches (smooth noise over ~6 voxels) plus a little
+    // per-voxel noise (`frame.lighting.w`). Strong per-voxel noise made every voxel
+    // stand out as a separate cube.
+    let fine = (hash3(s.seed) - 0.5) * 0.18 * frame.lighting.w;
+    let broad = (value_noise(vec3<f32>(s.seed) / 6.0) - 0.5) * 0.14;
+    let base = mat.color.rgb * (0.93 + broad + fine);
     let emissive = mat.params.x;
     if emissive > 0.0 {
         // Self-lit: no shadows, glows into the HDR buffer.
         return base * (0.5 + emissive * 0.35);
+    }
+    // Lighting uses the smoothed normal, ray offsets the face normal.
+    var ns = n;
+    if !s.is_body {
+        ns = smooth_normal(s.voxel, s.material, n);
     }
     var ao = 1.0;
     var glow = vec3<f32>(0.0);
@@ -555,9 +640,13 @@ fn shade(s: Surface, ro: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
         ao *= amb.occlusion;
         glow = amb.glow;
     }
-    let sun = max(dot(n, frame.sun_dir.xyz), 0.0) * sun_visibility(p, n);
+    let ndl = dot(ns, frame.sun_dir.xyz);
+    var sun = 0.0;
+    if ndl > 0.0 {
+        sun = ndl * sun_visibility(p, n, ns);
+    }
     // Sky light from above, a little bounce from below.
-    let sky_light = mix(vec3<f32>(0.16, 0.16, 0.18), vec3<f32>(0.34, 0.42, 0.56), n.y * 0.5 + 0.5);
+    let sky_light = mix(vec3<f32>(0.16, 0.16, 0.18), vec3<f32>(0.34, 0.42, 0.56), ns.y * 0.5 + 0.5);
     return base * (sky_light * ao + SUN_COLOR * 0.85 * sun + glow);
 }
 

@@ -228,6 +228,9 @@ de shader rompe la CI, no el arranque del juego.
      y el rayo a través de translúcidos.
    - `shade()`: sol con sombra, AO (`corner_ao` + `ray_ambient`, que además recoge luz
      de emisivos), emisivos.
+   - Aspecto de los vóxeles: `smooth_normal` inclina la normal según la pendiente
+     cercana, y el brillo usa ruido suave más un poco de ruido por vóxel
+     (`render.smooth_normals` y `color_noise`).
    - Una capa de transparencia (`material_run` mide el grosor).
    - Parámetros en `FrameUniform.lighting`, desde `Renderer::set_lighting`
      (ADR 010).

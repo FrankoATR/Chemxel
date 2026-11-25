@@ -39,6 +39,10 @@
         sun_direction: (0.55, 0.62, 0.32),
         shadow_distance: 768.0,  // microvoxels (48 m)
         ao_strength: 0.8,
+        // Look of the voxels: shading normals smoothed over the neighbours (0 = flat
+        // faces, each voxel reads as a cube) and per-voxel brightness noise (1 = strong).
+        smooth_normals: 0.5,
+        color_noise: 0.3,
     ),
     world: (
         sea_level: 0,

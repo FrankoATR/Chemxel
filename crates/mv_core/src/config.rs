@@ -190,6 +190,11 @@ pub struct RenderConfig {
     /// Ambient occlusion strength, 0..1 (0 disables it, and the light emissive
     /// voxels cast around them).
     pub ao_strength: f32,
+    /// Shading normals smoothed over neighbouring voxels, 0..1 (0 = flat faces, every
+    /// voxel reads as a cube; higher = slopes and edges look rounded).
+    pub smooth_normals: f32,
+    /// Per-voxel brightness noise, 0..1 (1 = strong, every voxel stands out).
+    pub color_noise: f32,
 }
 
 impl Default for RenderConfig {
@@ -206,6 +211,8 @@ impl Default for RenderConfig {
             sun_direction: [0.55, 0.62, 0.32],
             shadow_distance: 768.0,
             ao_strength: 0.8,
+            smooth_normals: 0.5,
+            color_noise: 0.3,
         }
     }
 }
@@ -431,6 +438,9 @@ impl Config {
                 "render.shadow_distance/ao_strength/sun_direction",
                 "shadow_distance >= 0, ao_strength in 0..=1, sun_direction non-zero",
             );
+        }
+        if !((0.0..=1.0).contains(&r.smooth_normals) && (0.0..=1.0).contains(&r.color_noise)) {
+            return invalid("render.smooth_normals/color_noise", "must be within 0..=1");
         }
         if self.render.chunk_slot_capacity == 0 {
             return invalid("render.chunk_slot_capacity", "must be at least 1");

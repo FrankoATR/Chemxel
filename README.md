@@ -44,6 +44,9 @@ GPU sobre brickmaps.
 
 La imagen tiene sombras del sol, oclusión ambiental, lava y fuego que brillan e iluminan
 lo que tienen cerca, agua, vapor y vidrio translúcidos, y niebla (F6 alterna la calidad).
+Las normales se suavizan con la pendiente cercana y el ruido de color es suave, para que
+los escalones de vóxeles no se lean como cubos grandes (`render.smooth_normals` y
+`color_noise` en `assets/config.ron`).
 Se camina con colisión (saltar, subir escalones, nadar) o se vuela (F), y el mundo se
 guarda solo: al salir y volver a entrar todo sigue como estaba.
 

@@ -344,6 +344,8 @@ impl App {
             sun_dir: glam::Vec3::from_array(rc.sun_direction),
             shadow_distance: shadows,
             ao_strength: ao,
+            smooth_normals: rc.smooth_normals,
+            color_noise: rc.color_noise,
         }
     }
 

@@ -81,6 +81,43 @@ compute shader `raymarch.wgsl`, que ya tenía el DDA de 3 niveles y los cuerpos 
 
 La aceptación (≥ 60 FPS) se cumple con margen de ×3–4.
 
+## Revisión: vóxeles que no parezcan cubos grandes
+
+Petición del usuario tras el hito 8: los vóxeles seguían leyéndose como cubos grandes.
+Había dos causas: el ruido de brillo por vóxel (±9 %) marcaba cada vóxel como una
+casilla distinta, y el sombreado con la normal de la cara convertía cada escalón de un
+vóxel en una línea dura.
+
+1. **Normales suavizadas** (`render.smooth_normals`, 0–1, por defecto 0,5).
+   - Para la cara que se ve, `smooth_normal` mide la altura de la superficie a 1, 2 y 3
+     vóxeles en las cuatro direcciones de la cara: +1 si sube, −1 si baja, 0 si sigue
+     plana.
+   - Esa pendiente, ponderada por 1/distancia, inclina la normal de la cara. Una
+     escalera de 45° se sombrea casi como un plano a 45°, y las aristas quedan
+     biseladas.
+   - Los materiales translúcidos solo cuentan consigo mismos: el agua sobre piedra tiene
+     su propia superficie.
+   - La normal suavizada se usa para el sol y la luz del cielo. La cara sigue mandando
+     en el origen de los rayos (sombra y AO), para no meterlos en el vóxel vecino. Si
+     la cara mira al lado contrario del sol pero la normal suavizada no, el rayo de
+     sombra sale del vóxel de aire de delante.
+   - Primer intento descartado: el gradiente de ocupación del entorno 3³. Biselaba las
+     terrazas, pero en las pendientes suaves cada escalón quedaba como una «escama»
+     clara y oscura, peor que antes.
+2. **Menos ruido de color.**
+   - El ruido por vóxel queda en el 30 % (`render.color_noise`; 1 = el aspecto
+     anterior).
+   - Se añaden manchas amplias de ruido de valor suave, de unos 6 vóxeles, para que la
+     superficie no quede plana.
+
+**Coste** (`--bench-fly`, enchufado, 1600×900): media 2,6–2,8 ms con el aspecto
+anterior frente a 3,1–3,2 ms ahora (unos 320 FPS). Con `smooth_normals: 0` se ahorran
+las 24 lecturas extra por píxel.
+
+**Limitación:** en pendientes muy suaves (un escalón cada más de 6 vóxeles), entre
+escalones la superficie queda plana y se ven bandas suaves a lo largo de las curvas de
+nivel. Haría falta una ventana más grande, con más lecturas por píxel.
+
 ## Limitaciones conocidas
 
 - **Una sola capa translúcida:** el vapor delante de agua muestra el agua opaca.
