@@ -14,6 +14,7 @@ mod input;
 mod inventory;
 mod logging;
 mod overlay;
+mod particles;
 mod player;
 mod save;
 

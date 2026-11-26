@@ -44,6 +44,7 @@
         // faces, each voxel reads as a cube) and per-voxel brightness noise (1 = strong).
         smooth_normals: 0.5,
         color_noise: 0.3,
+        max_particles: 8192,     // spray, foam and sparks (ADR 015); 0 = off
     ),
     world: (
         sea_level: 0,

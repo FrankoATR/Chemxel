@@ -40,6 +40,7 @@ use mv_world::World;
 use rayon::prelude::*;
 
 pub use aabb::Aabb;
+pub use automaton::{Splash, SplashKind};
 pub use integrity::{Anchor, VoxelBody};
 pub use table::{Kind, MaterialTable, Props, Rule, ThermalProps};
 pub use thermal::{CELL, CELLS, CELLS_AXIS, CellArray};
@@ -123,7 +124,12 @@ pub struct Simulation {
     /// Chunks that may hold still voxels with a lifetime (clouds), faded by the slow
     /// pass every `SLOW_PERIOD` ticks instead of being scanned every tick.
     still_decay: std::collections::HashSet<ChunkPos>,
+    /// Splash events since the last [`Simulation::take_splashes`] (ADR 015).
+    splashes: Vec<Splash>,
 }
+
+/// Splash events kept between two `take_splashes` (the rest are dropped).
+const MAX_SPLASHES: usize = 4096;
 
 /// Ticks between slow passes (fading clouds).
 const SLOW_PERIOD: u64 = 300;
@@ -185,7 +191,14 @@ impl Simulation {
             ),
             detached: Vec::new(),
             still_decay: std::collections::HashSet::new(),
+            splashes: Vec::new(),
         }
+    }
+
+    /// Where falling liquid landed or fell freely since the last call, for the
+    /// renderer's spray particles (visual only, ADR 015).
+    pub fn take_splashes(&mut self) -> Vec<Splash> {
+        std::mem::take(&mut self.splashes)
     }
 
     /// Sets what counts as ground for structural integrity (besides unloaded chunks
@@ -509,6 +522,9 @@ impl Simulation {
                 stats.reactions += out.reactions;
                 stats.decays += out.decays;
                 stats.evaporations += out.evaporations;
+                let room = MAX_SPLASHES.saturating_sub(self.splashes.len());
+                self.splashes
+                    .extend(out.splashes.iter().take(room).copied());
                 for &(x, z, m) in &out.deposits {
                     self.deposit_at_ceiling(world, x, z, m);
                 }

@@ -10,6 +10,7 @@ mod camera;
 mod context;
 mod gpu_volume;
 mod heat;
+mod particles;
 mod raymarch;
 mod renderer;
 mod slots;
@@ -22,7 +23,7 @@ pub use gpu_volume::{
     VolumeDesc, VolumeStats,
 };
 pub use heat::HeatField;
-pub use renderer::{BrushPreview, FrameStats, Lighting, OverlayTarget, Renderer};
+pub use renderer::{BrushPreview, FrameStats, Lighting, OverlayTarget, ParticleInstance, Renderer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
@@ -67,5 +68,10 @@ mod shader_tests {
     #[test]
     fn blit_shader_is_valid() {
         validate("blit.wgsl", crate::blit::SHADER);
+    }
+
+    #[test]
+    fn particles_shader_is_valid() {
+        validate("particles.wgsl", crate::particles::SHADER);
     }
 }

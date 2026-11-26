@@ -171,6 +171,11 @@ impl RaymarchPass {
         &self.output_view
     }
 
+    /// The frame uniform buffer (shared with the particle pass).
+    pub fn uniform(&self) -> &wgpu::Buffer {
+        &self.uniform
+    }
+
     pub fn dispatch(
         &self,
         queue: &wgpu::Queue,

@@ -343,3 +343,31 @@ fn different_seeds_diverge() {
     let shapes: Vec<_> = (0..4).map(run).collect();
     assert!(shapes.windows(2).any(|w| w[0] != w[1]));
 }
+
+#[test]
+fn falling_liquid_reports_splashes_and_sand_does_not() {
+    let mut f = fixture(11);
+    f.put(w(10, 30, 10), w(13, 33, 13), f.water);
+    f.put(w(30, 30, 30), w(33, 33, 33), f.sand);
+    let (mut impacts, mut falling, mut others) = (0, 0, 0);
+    for _ in 0..60 {
+        f.run(1);
+        for s in f.sim.take_splashes() {
+            if s.material != f.water {
+                others += 1;
+            } else if s.kind == crate::SplashKind::Impact {
+                impacts += 1;
+            } else {
+                falling += 1;
+            }
+        }
+    }
+    assert!(impacts > 0, "water lands with spray");
+    assert!(falling > 0, "falling water throws mist");
+    assert_eq!(others, 0, "only liquids splash");
+    // Once it rests, no more splashes.
+    f.run(600);
+    f.sim.take_splashes();
+    f.run(5);
+    assert!(f.sim.take_splashes().is_empty());
+}

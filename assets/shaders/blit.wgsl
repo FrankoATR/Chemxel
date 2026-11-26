@@ -1,7 +1,9 @@
-// Copies the HDR raymarch output to the swapchain with a filmic tonemap.
-// The swapchain is sRGB, so the hardware applies the sRGB encoding on write.
+// Copies the HDR raymarch output to the swapchain with a filmic tonemap, over
+// which it composites the particles (premultiplied alpha). The swapchain is sRGB,
+// so the hardware applies the sRGB encoding on write.
 
 @group(0) @binding(0) var source: texture_2d<f32>;
+@group(0) @binding(1) var particles: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
@@ -40,6 +42,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         glow += bright(p + vec2<i32>(d * 3.0), size) * 0.6;
         glow += bright(p + vec2<i32>(d * 9.0), size) * 0.4;
     }
-    let color = hdr + glow * (0.18 / 8.0);
+    let part = textureLoad(particles, p, 0);
+    let color = (hdr + glow * (0.18 / 8.0)) * (1.0 - part.a) + part.rgb;
     return vec4<f32>(aces(color * 1.1), 1.0);
 }

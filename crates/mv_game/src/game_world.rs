@@ -106,6 +106,7 @@ impl GameWorld {
             heat_capacity: r.heat_view_capacity,
             body_capacity: config.physics.max_bodies,
             body_voxel_capacity: config.physics.max_body_voxels,
+            particle_capacity: r.max_particles,
         }
     }
 

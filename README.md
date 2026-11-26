@@ -36,7 +36,8 @@ que toca agua se apaga en obsidiana, el ácido disuelve la roca y el fuego se pr
 madera y hojas, sube en llamas, deja un poco de ceniza y humo, y se apaga con agua. Los
 líquidos (agua, lava, ácido) llevan un nivel de llenado por vóxel: un estanque queda con la
 superficie plana y lisa, el agua se derrama por los bordes y se reparte, y un charco deja
-de extenderse en vez de temblar. Las películas finas se evaporan, suben y forman nubes que
+de extenderse en vez de temblar; al caer salpica espuma (o chispas, la lava). Las
+películas finas se evaporan, suben y forman nubes que
 se desvanecen; la lava fina hace costra de basalto. Lo que queda
 suelto cae: al excavar la base de una torre, quemar un tronco o disolver un apoyo con
 ácido, la pieza se convierte en un cuerpo rígido (rapier3d) que cae, vuelca, choca y,
@@ -130,7 +131,8 @@ Backend gráfico forzado: `WGPU_BACKEND=dx12` (o `vulkan`).
 - **Ventana:** tamaño, título.
 - **Render:** vsync, distancia horizontal y vertical, memoria del brick pool, slots de
   chunk, presupuesto de subida por frame, campo de visión, dirección del sol, distancia
-  de sombras e intensidad de la oclusión ambiental.
+  de sombras, intensidad de la oclusión ambiental, aspecto de los vóxeles y número máximo
+  de partículas.
 - **Mundo:** semilla, nivel del mar, forma del terreno (colinas, rugosidad,
   acantilados, roca), densidad de hierba, flores, árboles y rocas, margen de descarga,
   trabajos de generación en paralelo.

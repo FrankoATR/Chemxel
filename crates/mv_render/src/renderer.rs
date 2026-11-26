@@ -10,6 +10,7 @@ use crate::camera::Camera;
 use crate::context::{GpuContext, SurfaceSize};
 use crate::gpu_volume::{GpuVolume, MaterialGpu, UploadStats, VolumeDesc, VolumeStats};
 use crate::heat::{HeatField, HeatVolume};
+use crate::particles::{ParticleGpu, ParticlePass};
 use crate::raymarch::{FrameUniform, RaymarchPass};
 
 /// Per-frame information returned to the caller (for overlays and logs).
@@ -46,6 +47,9 @@ pub struct Renderer {
     blit: BlitPass,
     heat: HeatVolume,
     bodies: BodyVolume,
+    particles: ParticlePass,
+    /// Scratch buffer for the particles converted to the GPU layout.
+    particle_scratch: Vec<ParticleGpu>,
     heat_view: bool,
     ambient: f32,
     sun_dir: Vec3,
@@ -53,6 +57,17 @@ pub struct Renderer {
     fog_start: f32,
     fog_k: f32,
     lighting: Lighting,
+}
+
+/// A particle to draw this frame (ADR 015).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParticleInstance {
+    /// Centre in world microvoxels.
+    pub position: DVec3,
+    /// Radius in voxels.
+    pub radius: f32,
+    /// Linear RGB (above 1 glows) and opacity.
+    pub color: [f32; 4],
 }
 
 /// Lighting quality settings (milestone 7, ADR 010).
@@ -91,9 +106,22 @@ impl Renderer {
             volume.body_capacity,
             volume.body_voxel_capacity,
         );
+        let particle_capacity = volume.particle_capacity;
         let volume = GpuVolume::new(&ctx.device, volume);
         let raymarch = RaymarchPass::new(&ctx.device, &volume, &heat, &bodies, ctx.size());
-        let blit = BlitPass::new(&ctx.device, ctx.surface_format(), raymarch.output_view());
+        let particles = ParticlePass::new(
+            &ctx.device,
+            particle_capacity,
+            raymarch.uniform(),
+            raymarch.output_view(),
+            ctx.size(),
+        );
+        let blit = BlitPass::new(
+            &ctx.device,
+            ctx.surface_format(),
+            raymarch.output_view(),
+            particles.target(),
+        );
         Self {
             ctx,
             volume,
@@ -101,6 +129,8 @@ impl Renderer {
             blit,
             heat,
             bodies,
+            particles,
+            particle_scratch: Vec::new(),
             heat_view: false,
             ambient: 20.0,
             sun_dir: Lighting::default().sun_dir.normalize(),
@@ -130,8 +160,31 @@ impl Renderer {
             &self.bodies,
             size,
         );
-        self.blit
-            .set_source(&self.ctx.device, self.raymarch.output_view());
+        self.particles.resize(
+            &self.ctx.device,
+            self.raymarch.uniform(),
+            self.raymarch.output_view(),
+            size,
+        );
+        self.blit.set_source(
+            &self.ctx.device,
+            self.raymarch.output_view(),
+            self.particles.target(),
+        );
+    }
+
+    /// Particles to draw from now on (ADR 015), in world coordinates.
+    pub fn set_particles(&mut self, particles: &[ParticleInstance]) {
+        let origin = self.volume.origin().origin().0.as_dvec3();
+        self.particle_scratch.clear();
+        self.particle_scratch.extend(particles.iter().map(|p| {
+            let c = (p.position - origin).as_vec3();
+            ParticleGpu {
+                pos_size: [c.x, c.y, c.z, p.radius],
+                color: p.color,
+            }
+        }));
+        self.particles.set(&self.ctx.queue, &self.particle_scratch);
     }
 
     pub fn set_materials(&mut self, materials: &[MaterialGpu]) {
@@ -236,6 +289,7 @@ impl Renderer {
             });
         self.raymarch
             .dispatch(&self.ctx.queue, &mut encoder, &uniform);
+        self.particles.draw(&mut encoder);
         self.blit.draw(&mut encoder, &target);
         let overlay_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.ctx.overlay_format()),

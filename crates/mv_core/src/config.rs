@@ -195,6 +195,8 @@ pub struct RenderConfig {
     pub smooth_normals: f32,
     /// Per-voxel brightness noise, 0..1 (1 = strong, every voxel stands out).
     pub color_noise: f32,
+    /// Spray, foam and sparks drawn at once (0 turns particles off).
+    pub max_particles: u32,
 }
 
 impl Default for RenderConfig {
@@ -213,6 +215,7 @@ impl Default for RenderConfig {
             ao_strength: 0.8,
             smooth_normals: 0.5,
             color_noise: 0.3,
+            max_particles: 8192,
         }
     }
 }

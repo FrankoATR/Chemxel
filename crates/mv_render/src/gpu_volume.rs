@@ -84,6 +84,8 @@ pub struct VolumeDesc {
     /// Rigid bodies drawn at once, and their total voxels (2 bytes each).
     pub body_capacity: u32,
     pub body_voxel_capacity: u32,
+    /// Particles drawn at once (32 bytes each).
+    pub particle_capacity: u32,
 }
 
 /// Counters from uploads, for the debug overlay and budgets.

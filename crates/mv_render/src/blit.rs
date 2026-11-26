@@ -14,6 +14,7 @@ impl BlitPass {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         source: &wgpu::TextureView,
+        particles: &wgpu::TextureView,
     ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blit.wgsl"),
@@ -21,16 +22,7 @@ impl BlitPass {
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blit"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[texture_entry(0), texture_entry(1)],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("blit"),
@@ -62,7 +54,7 @@ impl BlitPass {
             multiview_mask: None,
             cache: None,
         });
-        let bind_group = create_bind_group(device, &layout, source);
+        let bind_group = create_bind_group(device, &layout, source, particles);
         Self {
             pipeline,
             layout,
@@ -70,9 +62,14 @@ impl BlitPass {
         }
     }
 
-    /// Points the pass at a new source texture (after a resize).
-    pub fn set_source(&mut self, device: &wgpu::Device, source: &wgpu::TextureView) {
-        self.bind_group = create_bind_group(device, &self.layout, source);
+    /// Points the pass at new source textures (after a resize).
+    pub fn set_source(
+        &mut self,
+        device: &wgpu::Device,
+        source: &wgpu::TextureView,
+        particles: &wgpu::TextureView,
+    ) {
+        self.bind_group = create_bind_group(device, &self.layout, source, particles);
     }
 
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
@@ -95,17 +92,37 @@ impl BlitPass {
     }
 }
 
+fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
 fn create_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     source: &wgpu::TextureView,
+    particles: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("blit"),
         layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(source),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(particles),
+            },
+        ],
     })
 }

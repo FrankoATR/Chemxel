@@ -79,6 +79,8 @@ pub struct App {
     world: GameWorld,
     sim: Simulation,
     physics: Physics,
+    /// Spray, foam and sparks from falling liquids (ADR 015).
+    particles: crate::particles::Particles,
     timestep: FixedTimestep,
     frame_timer: FrameTimer,
     camera: Camera,
@@ -166,6 +168,10 @@ impl App {
             &config.physics,
             (1.0 / config.sim.tick_rate_hz) as f32,
         );
+        let particles = crate::particles::Particles::new(
+            config.render.max_particles,
+            &game_world::gpu_materials(&registry),
+        );
         Self {
             config,
             registry,
@@ -174,6 +180,7 @@ impl App {
             world,
             sim,
             physics,
+            particles,
             timestep,
             frame_timer: FrameTimer::new(),
             camera,
@@ -417,6 +424,8 @@ impl App {
         if let Some(r) = self.running.as_mut() {
             r.renderer
                 .set_materials(&game_world::gpu_materials(&registry));
+            self.particles
+                .set_materials(&game_world::gpu_materials(&registry));
         }
         tracing::info!(
             "hot reload: {} materials, {} reactions",
@@ -447,6 +456,10 @@ impl App {
                 );
             }
         }
+        // Spray and foam where falling liquid landed (visual only).
+        let splashes = self.sim.take_splashes();
+        self.particles.spawn(&splashes);
+        self.particles.update(dt.as_secs_f32(), &self.world.world);
         let ready = self.world.is_idle();
         let (mut spawn, mut finished) = (None, false);
         if let Some(b) = self.bench_drop.as_mut() {
@@ -665,6 +678,7 @@ impl App {
             })
             .collect();
         running.renderer.set_bodies(&bodies);
+        running.renderer.set_particles(self.particles.instances());
 
         if running.renderer.heat_view() {
             running

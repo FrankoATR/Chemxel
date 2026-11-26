@@ -65,6 +65,10 @@ const SALT_REACT: u64 = 0x5EAC_7104;
 const SALT_DECAY: u64 = 0xDECA_7000;
 const SALT_EVAPORATE: u64 = 0xE7A9_0A7E;
 const SALT_VISCOUS: u64 = 0x3A9D_E512;
+const SALT_SPLASH: u64 = 0x5B1A_54E5;
+/// Chances per tick of a splash event: a landing liquid voxel, a free-falling one.
+const IMPACT_CHANCE: u32 = u32::MAX / 2;
+const FALLING_CHANCE: u32 = u32::MAX / 16;
 /// Smallest level difference that makes a liquid share (3 % of a voxel, below
 /// what the renderer shows): without it, an endless tail of invisible one- and
 /// two-level flows keeps big lakes awake.
@@ -133,6 +137,25 @@ pub struct TaskOut {
     /// Gases with a ceiling whose lifetime ended: (world x, z, material) to place at
     /// the ceiling height above (vapour condensing into the cloud layer).
     pub deposits: Vec<(i64, i64, MaterialId)>,
+    /// Visual events for the renderer's particles (ADR 015).
+    pub splashes: Vec<Splash>,
+}
+
+/// Where falling liquid throws spray (visual only, ADR 015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Splash {
+    /// World voxel.
+    pub pos: I64Vec3,
+    pub kind: SplashKind,
+    pub material: MaterialId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplashKind {
+    /// A falling voxel landed on something: spray and foam.
+    Impact,
+    /// A voxel falling freely through the air: a little mist.
+    Falling,
 }
 
 impl Default for Aabb {
@@ -494,6 +517,27 @@ impl Sweep<'_, '_> {
         ok.then_some(t)
     }
 
+    /// Liquid `m` falling into `q` through the air: it lands (spray) if it cannot
+    /// fall further, else it is falling freely (mist). Sampled, visual only.
+    fn splash(&mut self, q: IVec3, m: MaterialId, props: Props) {
+        let kind = if self.enterable(m, props, q - IVec3::Y, Dir::Down).is_some() {
+            SplashKind::Falling
+        } else {
+            SplashKind::Impact
+        };
+        let chance = match kind {
+            SplashKind::Impact => IMPACT_CHANCE,
+            SplashKind::Falling => FALLING_CHANCE,
+        };
+        if self.random_salted(q, SALT_SPLASH) < chance {
+            self.out.splashes.push(Splash {
+                pos: self.view.origin + q.as_i64vec3(),
+                kind,
+                material: m,
+            });
+        }
+    }
+
     /// Swaps the voxel at `p` (inside the chunk, material `m`) with `q` (material `t`).
     #[inline]
     fn swap(&mut self, p: IVec3, q: IVec3, m: MaterialId, t: MaterialId) {
@@ -555,6 +599,9 @@ impl Sweep<'_, '_> {
     fn fall(&mut self, p: IVec3, m: MaterialId, props: Props) -> bool {
         let below = p - IVec3::Y;
         if let Some(t) = self.enterable(m, props, below, Dir::Down) {
+            if props.kind == Kind::Liquid && self.ctx.table.get(t).kind == Kind::Gas {
+                self.splash(below, m, props);
+            }
             self.swap(p, below, m, t);
             return true;
         }

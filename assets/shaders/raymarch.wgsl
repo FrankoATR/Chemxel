@@ -767,7 +767,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var color = sky_with_sun(rd);
     var s = find_surface(ro, rd, 0u, FAR);
+    // Distance to the first surface, kept in alpha for the particle pass.
+    var depth = 6.0e4;
     if s.found {
+        depth = min(s.t, 6.0e4);
         let mat = materials[s.material];
         // Liquid surfaces: smooth normal from the neighbouring fill levels.
         if mat.params.y > 0.0 && !s.is_body && s.normal.y > 0.5 {
@@ -814,5 +817,5 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         color = apply_fog(color, rd, s.t);
     }
-    textureStore(output, vec2<i32>(id.xy), vec4<f32>(color, 1.0));
+    textureStore(output, vec2<i32>(id.xy), vec4<f32>(color, depth));
 }

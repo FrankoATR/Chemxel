@@ -56,7 +56,7 @@ crates/
   mv_render     wgpu: GpuContext, Camera, GpuVolume (ventana + brickmap), raymarch, blit
   mv_game       binario: App (loop), GameWorld (streaming+subida+guardado), Editor,
                 Gui/overlay egui, Inventory (barra rápida, rueda Tab, catálogo Enter),
-                Player, FlyController, SaveSlot, InputState, BenchFly
+                Player, FlyController, SaveSlot, InputState, BenchFly, Particles
 benches/        paquete mv_benches (Criterion)
 assets/         config.ron, materials/*.ron, reactions/*.ron, shaders/*.wgsl
 docs/decisions/ ADRs (NNN-titulo.md)
@@ -164,6 +164,9 @@ Nada de `unsafe`.
   `energy_imbalance`.
 - **GPU:** el nivel va en los 4 bits altos del vóxel (16 alturas). `raymarch.wgsl`
   corta el vóxel a su altura y `liquid_normal` suaviza la superficie.
+- **Salpicaduras (ADR 015):** `Sweep::splash` emite `Splash` (`Impact` / `Falling`)
+  cuando un líquido cae por el aire. `Simulation::take_splashes` los entrega a
+  `mv_game::particles`; son solo visuales.
 
 **Nubes (ADR 012):**
 - **Evaporación:** las películas finas sobre el suelo, en reposo, pasan a
@@ -243,7 +246,8 @@ Toda regla nueva lleva un test.
 
 ### Shaders
 
-`mv_render` valida `raymarch.wgsl` y `blit.wgsl` con `wgpu::naga` en `cargo test`. Un error
+`mv_render` valida `raymarch.wgsl`, `particles.wgsl` y `blit.wgsl` con `wgpu::naga` en
+`cargo test`. Un error
 de shader rompe la CI, no el arranque del juego.
 
 ### Render (`mv_render`, ADR 003 y 005)
@@ -262,8 +266,12 @@ de shader rompe la CI, no el arranque del juego.
    - Una capa de transparencia (`material_run` mide el grosor).
    - Parámetros en `FrameUniform.lighting`, desde `Renderer::set_lighting`
      (ADR 010).
-3. `blit.wgsl`: bloom barato y tonemap ACES a la swapchain sRGB.
-4. Closure de overlay (egui) sobre una vista no sRGB de la swapchain.
+3. `particles.wgsl` (ADR 015): billboards en un objetivo propio (alfa
+   premultiplicado). Se descartan detrás de los vóxeles con la distancia que el
+   raymarch guarda en el alfa de su salida. `Renderer::set_particles` cada frame.
+4. `blit.wgsl`: bloom barato, mezcla de las partículas y tonemap ACES a la swapchain
+   sRGB.
+5. Closure de overlay (egui) sobre una vista no sRGB de la swapchain.
 
 **Datos GPU:**
 - `chunk_grid`: ventana de chunks que sigue a la cámara (`set_volume_origin`).
